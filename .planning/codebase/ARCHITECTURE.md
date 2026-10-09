@@ -1,3 +1,7 @@
+---
+last_mapped_commit: df6531c57a6b9e852d2a034c380a3e98ef1c60d1
+last_mapped_at: 2026-10-09
+---
 # Architecture
 
 **Analysis Date:** 2026-10-09
@@ -46,11 +50,13 @@
 ```
 
 ### 1. Presentation & Workflow Layer
+
 - **Component:** `app.py`
 - **Purpose:** Manages user interactions, credential input forms, workflow stage transitions, real-time data preview tables, and error banners.
 - **State Management:** Uses Streamlit reactive session state (`st.session_state`) for credentials, active database, active table, workspace identifier, inspection metrics, and transformation configurations.
 
 ### 2. Transformation & Orchestration Layer
+
 - **Component:** `src/staging.py`
 - **Purpose:** Core business logic for creating and managing isolated workspace tables, executing data cleaning transformations, and verifying safety constraints.
 - **Key Modules/Functions:**
@@ -62,6 +68,7 @@
   - `detect_date_columns`, `preview_column_standardization`, `standardize_column`
 
 ### 3. Rule & Parsing Engine
+
 - **Components:** `src/date_rules.py`, `src/advanced_date_standardization.py`
 - **Purpose:** Deterministic pattern recognition and parsing for unstructured or messy data representations without risk of data corruption.
 - **Rule 1 (Textual Month Detection):** Maps month names/abbreviations (`January`, `Aug`, `Sept`) + 4-digit years.
@@ -69,21 +76,25 @@
 - **Ambiguity Guard:** Unambiguous days (<= 12) or malformed values are converted to `NULL` to prevent false date conversions.
 
 ### 4. Profiling & Quality Assessment Layer
+
 - **Component:** `src/profiling.py`
 - **Purpose:** Computes comprehensive column-level metrics: total rows, null counts, null percentage, distinct value cardinality, and candidate quality scores.
 - **Key Functions:** `profile_table`, `profile_source_table`, `profile_workspace`.
 
 ### 5. Export & Audit Reporting Layer
+
 - **Component:** `src/pdf_report.py`
 - **Purpose:** Generates executive-ready PDF audit reports summarizing initial data quality, transformations applied, and post-cleaning improvements.
 
 ### 6. Database Connectivity & Metadata Layer
+
 - **Components:** `src/connection.py`, `src/metadata.py`
 - **Purpose:** Low-level engine creation, connection pooling, credential verification, and schema/table metadata reflection via SQLAlchemy Core and `INFORMATION_SCHEMA`.
 
 ## Data Flow
 
 ### Typical Cleaning Lifecycle:
+
 1. **Connection & Discovery:**
    - User inputs credentials in sidebar.
    - `MySQLConnectionManager.create_engine()` establishes engine with timeout.

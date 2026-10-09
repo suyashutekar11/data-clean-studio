@@ -1,3 +1,7 @@
+---
+last_mapped_commit: df6531c57a6b9e852d2a034c380a3e98ef1c60d1
+last_mapped_at: 2026-10-09
+---
 # Testing Strategies & Test Suite Overview
 
 **Analysis Date:** 2026-10-09
