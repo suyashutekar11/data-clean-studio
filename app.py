@@ -60,6 +60,7 @@ from src.staging import (
 )
 from src.profiling import profile_source_table, profile_workspace
 from src.pdf_report import generate_executive_profile_pdf
+from src.ui.theme import inject_glass_theme
 
 # ============================================================
 # Page Configuration
@@ -1927,7 +1928,9 @@ def render_hero_welcome() -> None:
 if "ui_theme" not in st.session_state:
     st.session_state.ui_theme = "dark"
 
-inject_global_css(palette=st.session_state.ui_theme)
+inject_glass_theme(dark=(st.session_state.get("ui_theme", "dark") == "dark"))
+# Animated background blob — must be a real DOM element so CSS can size/position it
+st.markdown('<div class="dq-blob3"></div>', unsafe_allow_html=True)
 
 
 # ============================================================
@@ -1964,17 +1967,6 @@ for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
-# Floating theme toggle button (top‑right)
-floating_theme = st.button(
-    ("🌙 Dark Mode" if st.session_state.ui_theme == "dark" else "☀️ Light Mode"),
-    key="floating_theme_toggle",
-    help="Toggle dark / light mode",
-)
-if floating_theme:
-    st.session_state.ui_theme = (
-        "light" if st.session_state.ui_theme == "dark" else "dark"
-    )
-    st.rerun()
 
 
 # ============================================================
@@ -1983,6 +1975,7 @@ if floating_theme:
 
 CONNECTION_IDLE_TIMEOUT_SECONDS = 20 * 60
 CONNECTION_HEARTBEAT_SECONDS = 60
+
 
 
 def mark_connection_activity():
