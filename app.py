@@ -2128,7 +2128,7 @@ def calculate_health_score(profile_result: Dict[str, Any]) -> Tuple[int, str, st
     col_count = profile_result.get("column_count", 0)
 
     if row_count == 0 or col_count == 0:
-        return 100, "Clean (Empty Table)", "#10B981"
+        return 100, "Clean (Empty Table)", "#15803D"
 
     total_cells = row_count * col_count
     col_profiles = profile_result.get("column_profiles")
@@ -2168,13 +2168,13 @@ def calculate_health_score(profile_result: Dict[str, Any]) -> Tuple[int, str, st
     score = max(0, min(100, int(round(raw_score))))
 
     if score >= 90:
-        return score, "Excellent Health", "#059669"
+        return score, "Excellent Health", "#15803D"
     elif score >= 75:
-        return score, "Good Quality", "#2563EB"
+        return score, "Good Quality", "#15803D"
     elif score >= 50:
-        return score, "Fair / Needs Cleaning", "#D97706"
+        return score, "Fair / Needs Cleaning", "#B45309"
     else:
-        return score, "Poor / Critical Issues", "#DC2626"
+        return score, "Poor / Critical Issues", "#B91C1C"
 
 
 # ============================================================
@@ -2354,17 +2354,17 @@ def render_data_profile_dialog(engine, db_name: str, tbl_name: str):
         dup_diff = src_dup - ws_dup
 
         diff_badge = (
-            f'<span style="color: #10B981; font-weight: 700;">+{score_diff} pts</span>'
+            f'<span style="color: var(--dq-success); font-weight: 700;">+{score_diff} pts</span>'
             if score_diff > 0
-            else f'<span style="color: #64748B;">{score_diff} pts</span>'
+            else f'<span style="color: var(--dq-text-muted);">{score_diff} pts</span>'
         )
         dup_badge = (
-            f'<span style="color: #10B981; font-weight: 700;">-{dup_diff} duplicates cleaned</span>'
+            f'<span style="color: var(--dq-success); font-weight: 700;">-{dup_diff} duplicates cleaned</span>'
             if dup_diff > 0
             else "0 change"
         )
         delta_callout = (
-            f'<div style="margin-top: 0.5rem; font-size: 0.85rem; color: #94A3B8;">'
+            f'<div style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--dq-text-muted);">'
             f"<b>Comparison vs Source Baseline:</b> Source Health: <b>{src_score}/100</b> Workspace Health: <b>{score}/100</b> ({diff_badge}) &nbsp;|&nbsp; Duplicates: {dup_badge}"
             f"</div>"
         )
@@ -2521,7 +2521,7 @@ def render_data_profile_dialog(engine, db_name: str, tbl_name: str):
         ):
             st.markdown("##### Missingness Percentage by Column")
             chart_df = col_prof_df.set_index("Column")[["Null %"]]
-            st.bar_chart(chart_df, color="#3B82F6")
+            st.bar_chart(chart_df, color="#1E293B")
         else:
             st.info("Insufficient data to plot missingness chart.")
 
@@ -5659,7 +5659,7 @@ else:
                                                                         c
                                                                     )
                                                                     val_display = (
-                                                                        '<span style="color: #94a3b8; font-style: italic;">NULL</span>'
+                                                                        '<span style="color: var(--dq-text-muted); font-style: italic;">NULL</span>'
                                                                         if val is None
                                                                         else str(val)
                                                                     )
