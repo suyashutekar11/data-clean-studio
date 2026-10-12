@@ -65,6 +65,8 @@ Traditional approaches either risk modifying production data directly, require c
 
 ![DataClean Studio Demo](demo.gif)
 
+**Full video:** [dataclean-studio-demo.mp4](assets/dataclean-studio-demo.mp4) (48s, 44MB)
+
 ---
 
 ## Quick Start
