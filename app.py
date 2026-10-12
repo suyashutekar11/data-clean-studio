@@ -60,7 +60,16 @@ from src.staging import (
 )
 from src.profiling import profile_source_table, profile_workspace
 from src.pdf_report import generate_executive_profile_pdf
-from src.ui.theme import inject_glass_theme
+from ui.theme import inject_theme
+from ui.credential_dialog import is_credential_error, render_credential_error_dialog
+from ui.sidebar_view import (
+    get_sidebar_css,
+    render_sidebar_brand_redesign,
+    render_sidebar_promo_card,
+    render_sidebar_section_heading,
+    render_sidebar_status_card_redesign,
+    render_sidebar_bottom_waves,
+)
 
 # ============================================================
 # Page Configuration
@@ -151,12 +160,208 @@ def theme_toggle() -> str:
     return st.session_state.ui_theme
 
 
+# ============================================================
+# Professional Alert Modal System
+# ============================================================
+
+def show_alert(
+    title: str,
+    message: str,
+    alert_type: str = "error",
+    key: str = "dq_alert",
+    on_dismiss: str = None,
+    auto_dismiss: bool = True,
+    auto_dismiss_delay: int = 3000
+) -> None:
+    """
+    Display a professional animated alert modal in the center of the screen.
+    
+    Parameters
+    ----------
+    title : str
+        Alert title (e.g., "Connection Failed", "Invalid Credentials")
+    message : str
+        Detailed message for the user
+    alert_type : str
+        One of: "error", "warning", "info", "success"
+    key : str
+        Unique key for this alert (used in session_state)
+    on_dismiss : str, optional
+        Session state key to set True when dismissed
+    auto_dismiss : bool
+        If True, auto-dismiss after auto_dismiss_delay milliseconds
+    auto_dismiss_delay : int
+        Delay in milliseconds before auto-dismiss (default 3000 = 3 seconds)
+    """
+    alert_key = f"{key}_visible"
+    if alert_key not in st.session_state:
+        st.session_state[alert_key] = True
+    
+    if not st.session_state[alert_key]:
+        return
+    
+    # Icon mapping
+    icons = {
+        "error": "✕",
+        "warning": "⚠",
+        "info": "ℹ",
+        "success": "✓"
+    }
+    
+    # Accessible role descriptions
+    role_desc = {
+        "error": "Error alert",
+        "warning": "Warning alert", 
+        "info": "Information alert",
+        "success": "Success alert"
+    }
+    
+    icon = icons.get(alert_type, "✕")
+    role = role_desc.get(alert_type, "Alert")
+    
+    render_html(f"""
+    <div class="dq-alert-overlay" id="dq-alert-overlay-{key}" role="alertdialog" aria-labelledby="dq-alert-title-{key}" aria-describedby="dq-alert-message-{key}" aria-modal="true">
+        <div class="dq-alert-modal" id="dq-alert-modal-{key}">
+            <div class="dq-alert-header">
+                <div class="dq-alert-icon {alert_type}" aria-hidden="true">{icon}</div>
+                <h3 class="dq-alert-title" id="dq-alert-title-{key}">{title}</h3>
+                <button class="dq-alert-close" onclick="closeAlert('{key}')" aria-label="Dismiss {role.lower()}">✕</button>
+            </div>
+<div class="dq-alert-body">
+                <p class="dq-alert-message" id="dq-alert-message-{key}">{message}</p>
+            </div>
+            <div class="dq-alert-actions">
+                <button class="dq-alert-btn primary" onclick="closeAlert('{key}')" autofocus>OK</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // Close function - sets a flag that Streamlit can detect via a hidden checkbox
+    window.closeAlert = function(key) {{
+        const overlay = document.getElementById('dq-alert-overlay-' + key);
+        const modal = document.getElementById('dq-alert-modal-' + key);
+        if (overlay && modal) {{
+            overlay.classList.add('closing');
+            modal.classList.add('closing');
+            setTimeout(() => {{
+                overlay.remove();
+            }}, 200);
+        }}
+        
+        // Trigger Streamlit rerun by checking the hidden checkbox
+        setTimeout(() => {{
+            const checkbox = document.getElementById('dq_alert_dismiss_' + key);
+            if (checkbox && !checkbox.checked) {{
+                checkbox.click();
+            }}
+        }}, 50);
+    }};
+    
+    // Close on overlay click
+    document.getElementById('dq-alert-overlay-{key}').addEventListener('click', function(e) {{
+        if (e.target === this) {{
+            closeAlert('{key}');
+        }}
+    }});
+    
+    // Close on Escape key
+    document.addEventListener('keydown', function handler(e) {{
+        if (e.key === 'Escape') {{
+            closeAlert('{key}');
+            document.removeEventListener('keydown', handler);
+        }}
+    }});
+
+    // Auto-dismiss after {auto_dismiss_delay}ms
+    {f"setTimeout(() => closeAlert('{key}'), {auto_dismiss_delay});" if auto_dismiss else ""}
+    </script>
+    """)
+    
+    # Dismiss checkbox - hidden but accessible to JavaScript
+    dismissed = st.checkbox(
+        "Dismiss alert",
+        key=f"dq_alert_dismiss_{key}",
+        label_visibility="collapsed",
+        value=False
+    )
+    if dismissed:
+        st.session_state[alert_key] = False
+        st.rerun()
+    
+    # Hide checkbox visually but keep it in DOM for JavaScript
+    render_html(f"""
+    <style>
+    div[data-testid="stCheckbox"]:has(input[id="dq_alert_dismiss_{key}"]) {{
+        position: fixed !important;
+        left: -9999px !important;
+        top: -9999px !important;
+        width: 1px !important;
+        height: 1px !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        z-index: -1 !important;
+    }}
+    </style>
+    """)
+
+
+def parse_connection_error(error_msg: str) -> tuple[str, str]:
+    """
+    Parse MySQL connection error and return user-friendly (title, message).
+    
+    Returns
+    -------
+    tuple: (title, message) - both user-friendly strings
+    """
+    error_lower = error_msg.lower()
+    
+    # Access denied - wrong credentials
+    if "1045" in error_msg or "access denied" in error_lower or is_credential_error(error_msg):
+        return (
+            "Invalid Credentials",
+            "Your credentials are wrong. Please check your credentials."
+        )
+    
+    # Cannot connect to server
+    elif "2003" in error_msg or "2002" in error_msg or "can't connect" in error_lower or "cannot reach" in error_lower:
+        return (
+            "Cannot Reach Server",
+            "Unable to connect to MySQL server. Please check the host address, port, and network/firewall settings."
+        )
+    
+    # Database doesn't exist
+    elif "1049" in error_msg or "unknown database" in error_lower:
+        return (
+            "Database Not Found",
+            "The specified database does not exist on this server. Please check the database name."
+        )
+    
+    # Timeout
+    elif "timeout" in error_lower or "timed out" in error_lower:
+        return (
+            "Connection Timeout",
+            "The server took too long to respond. Please verify the host and port are correct and reachable."
+        )
+    
+    # SSL/TLS issues
+    elif "ssl" in error_lower or "tls" in error_lower or "certificate" in error_lower:
+        return (
+            "SSL/TLS Error",
+            "There's an SSL certificate issue. Try connecting without SSL or check your certificate configuration."
+        )
+    
+    # Generic fallback
+    else:
+        return (
+            "Connection Failed",
+            f"Unable to establish connection: {error_msg}"
+        )
+
+
 def inject_global_css(palette: str = "dark") -> None:
     """Injects global enterprise design system tokens and styling rules based on selected palette."""
     is_light = palette == "light"
-
-    # sidebar width from session state (default 300)
-    sidebar_width = st.session_state.get("sidebar_width", 300)
 
     if is_light:
         tokens = """
@@ -304,9 +509,6 @@ def inject_global_css(palette: str = "dark") -> None:
 
     /* Sidebar: Premium Glassmorphism panel, adjustable width - Black Theme */
     [data-testid="stSidebar"] {{
-        min-width: {sidebar_width}px !important;
-        max-width: {sidebar_width}px !important;
-        width: {sidebar_width}px !important;
         background: 
             radial-gradient(circle at 15% 10%, rgba(30,30,30,0.30), transparent 35%),
             radial-gradient(circle at 85% 85%, rgba(60,60,60,0.20), transparent 40%),
@@ -446,59 +648,99 @@ def inject_global_css(palette: str = "dark") -> None:
     }}
 
     [data-testid="stSidebar"] label p {{
-        font-size: 13px !important;
+        font-size: 12px !important;
         font-weight: 500 !important;
-        color: #CBD5E1 !important;
-        margin: 0 !important;
-        line-height: 22px !important;
+        color: #94A3B8 !important;
+        margin: 0 0 6px 0 !important;
+        line-height: 1.4 !important;
+        letter-spacing: 0.01em !important;
+        text-transform: none !important;
     }}
 
     [data-testid="stSidebar"] [data-testid="stWidgetLabel"] {{
         display: flex !important;
-        align-items: center !important;
-        justify-content: space-between !important;
+        flex-direction: column !important;
+        align-items: flex-start !important;
         width: 100% !important;
     }}
 
     [data-testid="stSidebar"] [data-testid="stTooltipIcon"] {{
         margin-left: auto !important;
         color: #64748B !important;
+        opacity: 0.7 !important;
+        transition: opacity 150ms ease !important;
+    }}
+    [data-testid="stSidebar"] [data-testid="stTooltipIcon"]:hover {{
+        opacity: 1 !important;
     }}
 
     [data-testid="stSidebar"] [data-baseweb="input"] {{
-        height: 40px !important;
-        min-height: 40px !important;
-        border-radius: 8px !important;
+        height: 44px !important;
+        min-height: 44px !important;
+        border-radius: 10px !important;
     }}
 
     [data-testid="stSidebar"] [data-testid="stTextInput"] input,
     [data-testid="stSidebar"] [data-testid="stNumberInput"] input {{
-        height: 40px !important;
-        min-height: 40px !important;
-        line-height: 40px !important;
-        background: rgba(22, 33, 58, 0.65) !important;
-        border: 1px solid rgba(148, 163, 184, 0.18) !important;
-        border-radius: 8px !important;
+        height: 44px !important;
+        min-height: 44px !important;
+        line-height: 44px !important;
+        background: rgba(15, 23, 42, 0.55) !important;
+        border: 1px solid rgba(148, 163, 184, 0.22) !important;
+        border-radius: 10px !important;
         color: #E8ECF4 !important;
-        font-size: 13.5px !important;
-        padding: 0 10px !important;
-        transition: border-color 150ms ease, box-shadow 150ms ease !important;
+        font-size: 14px !important;
+        padding: 0 14px !important;
+        transition: all 180ms ease !important;
+        box-shadow: 
+            0 1px 2px rgba(0, 0, 0, 0.15),
+            inset 0 1px 0 rgba(255, 255, 255, 0.02) !important;
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stTextInput"] input:hover,
+    [data-testid="stSidebar"] [data-testid="stNumberInput"] input:hover {{
+        border-color: rgba(148, 163, 184, 0.35) !important;
+        background: rgba(15, 23, 42, 0.65) !important;
     }}
 
     [data-testid="stSidebar"] [data-testid="stTextInput"] input:focus,
     [data-testid="stSidebar"] [data-testid="stNumberInput"] input:focus {{
         border-color: #3B82F6 !important;
-        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25) !important;
+        box-shadow: 
+            0 0 0 3px rgba(59, 130, 246, 0.25),
+            0 2px 8px rgba(0, 0, 0, 0.20),
+            inset 0 1px 0 rgba(255, 255, 255, 0.03) !important;
+        background: rgba(15, 23, 42, 0.75) !important;
         outline: none !important;
     }}
 
+    [data-testid="stSidebar"] [data-testid="stTextInput"] input::placeholder,
+    [data-testid="stSidebar"] [data-testid="stNumberInput"] input::placeholder {{
+        color: #64748B !important;
+        opacity: 0.8 !important;
+        font-weight: 400 !important;
+        font-style: normal !important;
+    }}
+
     [data-testid="stSidebar"] [data-testid="stNumberInput"] [data-testid="stNumberInputContainer"] {{
-        height: 40px !important;
-        min-height: 40px !important;
-        border-radius: 8px !important;
-        background: rgba(22, 33, 58, 0.65) !important;
-        border: 1px solid rgba(148, 163, 184, 0.18) !important;
+        height: 44px !important;
+        min-height: 44px !important;
+        border-radius: 10px !important;
+        background: rgba(15, 23, 42, 0.55) !important;
+        border: 1px solid rgba(148, 163, 184, 0.22) !important;
         overflow: hidden !important;
+        box-shadow: 
+            0 1px 2px rgba(0, 0, 0, 0.15),
+            inset 0 1px 0 rgba(255, 255, 255, 0.02) !important;
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stNumberInput"] [data-testid="stNumberInputContainer"]:focus-within {{
+        border-color: #3B82F6 !important;
+        box-shadow: 
+            0 0 0 3px rgba(59, 130, 246, 0.25),
+            0 2px 8px rgba(0, 0, 0, 0.20),
+            inset 0 1px 0 rgba(255, 255, 255, 0.03) !important;
+        background: rgba(15, 23, 42, 0.75) !important;
     }}
 
     [data-testid="stSidebar"] [data-testid="stNumberInput"] button {{
@@ -507,12 +749,12 @@ def inject_global_css(palette: str = "dark") -> None:
 
     /* Sidebar Expander */
     [data-testid="stSidebar"] [data-testid="stExpander"] {{
-        border: 1px solid rgba(148, 163, 184, 0.16) !important;
-        border-radius: 8px !important;
-        background: rgba(22, 33, 58, 0.45) !important;
-        margin-top: 14px !important;
-        margin-bottom: 14px !important;
-        box-shadow: none !important;
+        border: 1px solid rgba(148, 163, 184, 0.18) !important;
+        border-radius: 10px !important;
+        background: rgba(15, 23, 42, 0.40) !important;
+        margin-top: 16px !important;
+        margin-bottom: 16px !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
         overflow: hidden !important;
     }}
 
@@ -521,15 +763,23 @@ def inject_global_css(palette: str = "dark") -> None:
     }}
 
     [data-testid="stSidebar"] [data-testid="stExpander"] summary {{
-        padding: 10px 14px !important;
+        padding: 12px 16px !important;
         font-size: 13px !important;
         color: #94A3B8 !important;
         font-weight: 500 !important;
         border: none !important;
+        background: rgba(15, 23, 42, 0.30) !important;
+        transition: all 150ms ease !important;
     }}
 
     [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {{
         color: #E8ECF4 !important;
+        background: rgba(15, 23, 42, 0.50) !important;
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary:focus {{
+        outline: none !important;
+        box-shadow: inset 0 0 0 2px rgba(59, 130, 246, 0.5) !important;
     }}
 
     /* Sidebar Action Buttons: 42px height, no text truncation */
@@ -1098,6 +1348,232 @@ def inject_global_css(palette: str = "dark") -> None:
         border-radius: var(--dq-radius-card) !important;
         border: 1px solid var(--dq-border) !important;
         background: var(--dq-surface) !important;
+    }}
+
+    /* ============================================================
+       Professional Alert Modal System (Custom)
+       ============================================================ */
+    .dq-alert-overlay {{
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        background: rgba(0, 0, 0, 0.55) !important;
+        backdrop-filter: blur(6px) !important;
+        -webkit-backdrop-filter: blur(6px) !important;
+        z-index: 99999 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 24px !important;
+        box-sizing: border-box !important;
+        animation: dqAlertFadeIn 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+    }}
+
+    .dq-alert-modal {{
+        background: var(--dq-surface) !important;
+        border: 1px solid var(--dq-border) !important;
+        border-radius: 16px !important;
+        box-shadow: 
+            0 24px 48px rgba(0, 0, 0, 0.25),
+            0 0 0 1px rgba(255, 255, 255, 0.05) inset !important;
+        max-width: 440px !important;
+        width: 100% !important;
+        overflow: hidden !important;
+        animation: dqAlertSlideUp 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+        transform-origin: center center !important;
+    }}
+
+    @supports (backdrop-filter: blur(1px)) {{
+        .dq-alert-modal {{
+            backdrop-filter: blur(24px) saturate(160%) !important;
+            -webkit-backdrop-filter: blur(24px) saturate(160%) !important;
+        }}
+    }}
+
+    .dq-alert-header {{
+        display: flex !important;
+        align-items: center !important;
+        gap: 12px !important;
+        padding: 20px 24px 12px 24px !important;
+        border-bottom: 1px solid var(--dq-border) !important;
+    }}
+
+    .dq-alert-icon {{
+        flex-shrink: 0 !important;
+        width: 40px !important;
+        height: 40px !important;
+        border-radius: 10px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        font-size: 18px !important;
+    }}
+
+    .dq-alert-icon.error {{
+        background: rgba(185, 28, 28, 0.12) !important;
+        color: #B91C1C !important;
+        border: 1px solid rgba(185, 28, 28, 0.25) !important;
+    }}
+
+    .dq-alert-icon.warning {{
+        background: rgba(180, 83, 9, 0.12) !important;
+        color: #B45309 !important;
+        border: 1px solid rgba(180, 83, 9, 0.25) !important;
+    }}
+
+    .dq-alert-icon.info {{
+        background: rgba(30, 58, 138, 0.12) !important;
+        color: #1E3A8A !important;
+        border: 1px solid rgba(30, 58, 138, 0.25) !important;
+    }}
+
+    .dq-alert-icon.success {{
+        background: rgba(21, 128, 61, 0.12) !important;
+        color: #15803D !important;
+        border: 1px solid rgba(21, 128, 61, 0.25) !important;
+    }}
+
+    .dq-alert-title {{
+        font-size: 16px !important;
+        font-weight: 600 !important;
+        color: var(--dq-text-primary) !important;
+        line-height: 1.3 !important;
+        margin: 0 !important;
+        flex: 1 !important;
+    }}
+
+    .dq-alert-close {{
+        flex-shrink: 0 !important;
+        width: 32px !important;
+        height: 32px !important;
+        border-radius: 8px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        background: transparent !important;
+        border: none !important;
+        color: var(--dq-text-muted) !important;
+        cursor: pointer !important;
+        transition: all 150ms ease !important;
+        font-size: 18px !important;
+        line-height: 1 !important;
+    }}
+
+    .dq-alert-close:hover {{
+        background: var(--dq-bg-soft) !important;
+        color: var(--dq-text-primary) !important;
+    }}
+
+    .dq-alert-body {{
+        padding: 20px 24px !important;
+    }}
+
+    .dq-alert-message {{
+        font-size: 14px !important;
+        color: var(--dq-text-secondary) !important;
+        line-height: 1.6 !important;
+        margin: 0 !important;
+    }}
+
+    .dq-alert-message strong {{
+        color: var(--dq-text-primary) !important;
+        font-weight: 600 !important;
+    }}
+
+    .dq-alert-actions {{
+        display: flex !important;
+        justify-content: flex-end !important;
+        gap: 10px !important;
+        padding: 16px 24px 20px 24px !important;
+        border-top: 1px solid var(--dq-border) !important;
+        background: var(--dq-bg-soft) !important;
+    }}
+
+    .dq-alert-btn {{
+        min-width: 96px !important;
+        height: 40px !important;
+        border-radius: 10px !important;
+        font-size: 13.5px !important;
+        font-weight: 600 !important;
+        cursor: pointer !important;
+        transition: all 150ms ease !important;
+        border: none !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 8px !important;
+    }}
+
+    .dq-alert-btn.primary {{
+        background: linear-gradient(135deg, #1E293B 0%, #0F172A 100%) !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.3) !important;
+    }}
+
+    .dq-alert-btn.primary:hover {{
+        filter: brightness(1.1) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.4) !important;
+    }}
+
+    .dq-alert-btn.secondary {{
+        background: var(--dq-surface) !important;
+        color: var(--dq-text-primary) !important;
+        border: 1px solid var(--dq-border) !important;
+    }}
+
+    .dq-alert-btn.secondary:hover {{
+        background: var(--dq-bg-soft) !important;
+        border-color: var(--dq-border-hover) !important;
+    }}
+
+    @keyframes dqAlertFadeIn {{
+        from {{
+            opacity: 0 !important;
+        }}
+        to {{
+            opacity: 1 !important;
+        }}
+    }}
+
+    @keyframes dqAlertSlideUp {{
+        from {{
+            opacity: 0 !important;
+            transform: scale(0.94) translateY(16px) !important;
+        }}
+        to {{
+            opacity: 1 !important;
+            transform: scale(1) translateY(0) !important;
+        }}
+    }}
+
+    @keyframes dqAlertSlideDown {{
+        from {{
+            opacity: 1 !important;
+            transform: scale(1) translateY(0) !important;
+        }}
+        to {{
+            opacity: 0 !important;
+            transform: scale(0.94) translateY(16px) !important;
+        }}
+    }}
+
+    .dq-alert-modal.closing {{
+        animation: dqAlertSlideDown 200ms cubic-bezier(0.4, 0, 0.6, 1) forwards !important;
+    }}
+
+    .dq-alert-overlay.closing {{
+        animation: dqAlertFadeIn 200ms cubic-bezier(0.4, 0, 0.6, 1) reverse forwards !important;
+    }}
+
+    /* Reduced motion */
+    @media (prefers-reduced-motion: reduce) {{
+        .dq-alert-overlay,
+        .dq-alert-modal {{
+            animation: none !important;
+        }}
     }}
 
     /* Normal (#2563EB) vs Destructive (#DC2626) Action Buttons */
@@ -1748,16 +2224,8 @@ def inject_global_css(palette: str = "dark") -> None:
 
 
 def render_sidebar_brand() -> None:
-    """Renders HTML for the sidebar brand header block."""
-    render_html("""
-    <div class="sidebar-brand-block">
-        <div class="sidebar-brand-icon">🛡️</div>
-        <div>
-            <div class="sidebar-brand-title">DataClean Studio</div>
-            <div class="sidebar-brand-sub">Connection Manager</div>
-        </div>
-    </div>
-    """)
+    """Renders HTML for the redesigned sidebar brand header block."""
+    render_sidebar_brand_redesign()
 
 
 def render_sidebar_status_card(
@@ -1767,33 +2235,18 @@ def render_sidebar_status_card(
     server_ver: str = "",
 ) -> None:
     """Renders HTML for the pinned sidebar connection status card."""
-    if connected:
-        html = f"""
-        <div class="sidebar-status-card">
-            <div class="sidebar-status-header">
-                <span class="sidebar-status-dot dot-connected"></span>
-                <span class="sidebar-status-title-connected">Connected</span>
-                <span class="sidebar-status-chip">Live</span>
-            </div>
-            <div class="sidebar-status-meta">
-                <strong>Endpoint:</strong> {host}<br>
-                <strong>User:</strong> {username} {f'&bull; {server_ver}' if server_ver else ''}
-            </div>
-        </div>
-        """
-    else:
-        html = """
-        <div class="sidebar-status-card">
-            <div class="sidebar-status-header">
-                <span class="sidebar-status-dot dot-disconnected"></span>
-                <span class="sidebar-status-title-disconnected">Disconnected</span>
-            </div>
-            <div class="sidebar-status-meta">
-                Ready to authenticate MySQL instance and initialize staging sandboxes.
-            </div>
-        </div>
-        """
-    render_html(html)
+    render_sidebar_status_card_redesign(
+        connected=connected,
+        host=host,
+        username=username,
+        server_ver=server_ver,
+    )
+
+
+from ui.welcome_view import (
+    render_app_header as _render_app_header_impl,
+    render_hero_welcome as _render_hero_welcome_impl,
+)
 
 
 def render_app_header(
@@ -1801,136 +2254,28 @@ def render_app_header(
     host: str = "",
     port: str | int = "",
     version: str = "v1.2 Standard",
-    theme: str = "dark",
+    theme: str = "light",
 ) -> None:
-    """Renders HTML for the slim top navigation header with single-dot status pill and theme badge."""
-    theme_label = "Dark" if theme == "dark" else "Light"
-    theme_icon = "🌙" if theme == "dark" else "☀️"
-
-    if connected:
-        status_html = (
-            f'<div class="status-pill status-connected">'
-            f'<span class="status-pill-dot"></span> Connected: {host}:{port}'
-            f"</div>"
-        )
-    else:
-        status_html = (
-            '<div class="status-pill status-disconnected">'
-            '<span class="status-pill-dot"></span> Not Connected'
-            "</div>"
-        )
-
-    html = f"""
-    <div class="page-fade-in content-wrapper">
-        <div class="app-top-header">
-            <div class="app-top-brand">
-                <div class="app-top-logo">🛡️</div>
-                <div>
-                    <div class="app-top-title">DataClean Studio</div>
-                    <div class="app-top-tagline">Enterprise MySQL Data Quality, Staging &amp; Cleaning Platform</div>
-                </div>
-            </div>
-            <div class="app-top-meta">
-                {status_html}
-                <div class="version-tag">{version}</div>
-                <div class="theme-badge">{theme_icon} {theme_label}</div>
-            </div>
-        </div>
-    </div>
-    """
-    render_html(html)
+    """Renders HTML for the top navigation bar matching the enterprise pill banner."""
+    _render_app_header_impl(
+        connected=connected,
+        host=host,
+        port=port,
+        version=version,
+        theme=theme,
+    )
 
 
 def render_hero_welcome() -> None:
-    """Renders HTML for the centered hero welcome container, trust row, feature cards, and visual timeline."""
-    render_html("""
-    <div class="page-fade-in content-wrapper">
-        <div class="hero-container">
-            <div class="hero-badge-tile">🛡️</div>
-            <h1 class="hero-headline">Enterprise MySQL <span class="gradient-text">Data Quality &amp; Cleaning</span></h1>
-            <p class="hero-subtitle">
-                High-assurance data quality auditing, isolated staging sandboxes, and automated cleaning rules for production MySQL databases.
-            </p>
-            <div class="hero-cta-hint">
-                <span class="hero-cta-arrow">&larr;</span> Enter credentials in the sidebar and click <strong>Connect</strong> to begin
-            </div>
-            <div class="hero-trust-row">
-                <div class="trust-item"><span class="trust-icon">🔒</span> Production tables never modified</div>
-                <div class="trust-item"><span class="trust-icon">📜</span> Full audit trail</div>
-                <div class="trust-item"><span class="trust-icon">📊</span> PDF quality reports</div>
-            </div>
-        </div>
-
-        <div class="features-grid">
-            <div class="feature-card">
-                <div class="feature-top-accent"></div>
-                <div class="feature-icon-tile icon-sandboxes">🛡️</div>
-                <div class="feature-title">Non-Destructive Staging</div>
-                <p class="feature-desc">
-                    All operations run in isolated staging workspaces. Production tables remain 100% untouched and safe.
-                </p>
-                <div class="feature-micro-link">Zero risk staging &rarr;</div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-top-accent"></div>
-                <div class="feature-icon-tile icon-profiling">📊</div>
-                <div class="feature-title">Deep Data Profiling</div>
-                <p class="feature-desc">
-                    Automated analysis of NULL rates, type inference, outlier detection, and quality scoring with PDF exports.
-                </p>
-                <div class="feature-micro-link">Automated audit &rarr;</div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-top-accent"></div>
-                <div class="feature-icon-tile icon-cleaning">✨</div>
-                <div class="feature-title">Automated Cleaning</div>
-                <p class="feature-desc">
-                    Rule-based fixes, transforms, duplicate resolution, casing normalization, and immutable audit logs.
-                </p>
-                <div class="feature-micro-link">One-click recipes &rarr;</div>
-            </div>
-        </div>
-
-        <div class="steps-timeline-container">
-            <div class="step-card">
-                <div class="step-number">1</div>
-                <div class="step-content">
-                    <div class="step-title">Connect Instance</div>
-                    <div class="step-desc">Authenticate host &amp; explore schemas</div>
-                </div>
-            </div>
-            <div class="step-arrow">&rarr;</div>
-            <div class="step-card">
-                <div class="step-number">2</div>
-                <div class="step-content">
-                    <div class="step-title">Profile Tables</div>
-                    <div class="step-desc">Audit NULLs, duplicates &amp; types</div>
-                </div>
-            </div>
-            <div class="step-arrow">&rarr;</div>
-            <div class="step-card">
-                <div class="step-number">3</div>
-                <div class="step-content">
-                    <div class="step-title">Stage &amp; Clean Safely</div>
-                    <div class="step-desc">Execute fixes in staging sandbox</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="app-footer-line">
-            DataClean Studio v1.2 &bull; Your data stays on your server
-        </div>
-    </div>
-    """)
+    """Renders HTML for the enterprise landing page with 2-column hero, 3D visual, feature cards, and workflow."""
+    _render_hero_welcome_impl()
 
 
 # Theme resolution & Global CSS rules injection
 if "ui_theme" not in st.session_state:
-    st.session_state.ui_theme = "dark"
+    st.session_state.ui_theme = "light"
 
-inject_glass_theme(dark=(st.session_state.get("ui_theme", "dark") == "dark"))
-# Animated background blob — must be a real DOM element so CSS can size/position it
-st.markdown('<div class="dq-blob3"></div>', unsafe_allow_html=True)
+inject_theme()
 
 
 # ============================================================
@@ -1938,7 +2283,7 @@ st.markdown('<div class="dq-blob3"></div>', unsafe_allow_html=True)
 # ============================================================
 
 DEFAULT_STATE = {
-    "ui_theme": "dark",
+    "ui_theme": "light",
     "connected": False,
     "engine": None,
     "selected_db": None,
@@ -1960,13 +2305,11 @@ DEFAULT_STATE = {
     "duplicate_row_actions": {},
     "active_view": "Source Table",
     "workspace_sub_tab": "🏠 Cleaning Hub",
-    "sidebar_width": 300,
 }
 
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
         st.session_state[key] = value
-
 
 
 # ============================================================
@@ -1975,7 +2318,6 @@ for key, value in DEFAULT_STATE.items():
 
 CONNECTION_IDLE_TIMEOUT_SECONDS = 20 * 60
 CONNECTION_HEARTBEAT_SECONDS = 60
-
 
 
 def mark_connection_activity():
@@ -2305,8 +2647,7 @@ def render_data_profile_dialog(engine, db_name: str, tbl_name: str):
 
     # ── Empty Profile State (Not generated yet) ──────────────────────
     if not profile_data:
-        render_html(
-            f"""
+        render_html(f"""
             <div class="safety-banner" style="margin-top: 1rem; border-color: var(--dq-accent-border); background: var(--dq-bg-soft);">
                 <div class="safety-banner-icon"></div>
                 <div class="safety-banner-content">
@@ -2314,8 +2655,7 @@ def render_data_profile_dialog(engine, db_name: str, tbl_name: str):
                     <p>Click below to perform an automated algorithmic data quality audit on this table.</p>
                 </div>
             </div>
-            """
-        )
+            """)
         if st.button(
             f"Generate {'Workspace'if is_workspace else'Source'} Profile",
             type="secondary",
@@ -2521,7 +2861,7 @@ def render_data_profile_dialog(engine, db_name: str, tbl_name: str):
         ):
             st.markdown("##### Missingness Percentage by Column")
             chart_df = col_prof_df.set_index("Column")[["Null %"]]
-            st.bar_chart(chart_df, color="#1E293B")
+            st.bar_chart(chart_df, color="#0F766E")
         else:
             st.info("Insufficient data to plot missingness chart.")
 
@@ -2580,6 +2920,7 @@ render_app_header(connected=connected, host=host_cfg, port=port_cfg, theme=ui_th
 # ============================================================
 
 with st.sidebar:
+    st.markdown(get_sidebar_css(), unsafe_allow_html=True)
     render_sidebar_brand()
 
     if st.session_state.connected:
@@ -2597,13 +2938,20 @@ with st.sidebar:
             except Exception:
                 pass
 
-        if st.button("Disconnect", use_container_width=True, type="primary", key="sb_disconnect_btn"):
+        if st.button(
+            "Disconnect",
+            use_container_width=True,
+            type="primary",
+            key="sb_disconnect_btn",
+        ):
             remove_connection_session()
             st.session_state.active_view = "Source Table"
             st.rerun()
 
         with st.expander("🔁 Switch Connection", expanded=False):
-            col_sh, col_sp = st.columns([2.8, 1.2], gap="small", vertical_alignment="top")
+            col_sh, col_sp = st.columns(
+                [2.8, 1.2], gap="small", vertical_alignment="top"
+            )
             with col_sh:
                 host = st.text_input(
                     "Host / IP Address",
@@ -2666,7 +3014,6 @@ with st.sidebar:
         # ── Data Profiling Section ──────────────────────────────
         render_html("""
         <div class="sidebar-section-header" style="margin-top: 18px;">📊 Data Profiling</div>
-        <div class="sidebar-section-desc">Generate deep quality audits across raw source data and isolated sandbox workspaces.</div>
         """)
 
         has_selected_table = bool(
@@ -2764,29 +3111,26 @@ with st.sidebar:
                         st.sidebar.error(f"{p_msg}")
     else:
         # ── Full connection form (disconnected) ──────────────────
-        render_html("""
-        <div class="sidebar-section-header">🗄️ Database Connection</div>
-        <div class="sidebar-section-desc">Connect to your MySQL database to manage and clean data.</div>
-        """)
+        render_sidebar_promo_card()
+        render_sidebar_section_heading()
 
-        # Host & Port on one row with 70/30 ratio and aligned top baseline
-        col_host, col_port = st.columns([2.8, 1.2], gap="small", vertical_alignment="top")
-        with col_host:
-            host = st.text_input(
-                "Host / IP Address",
-                value=st.session_state.conn_config.get("host", "localhost"),
-                placeholder="localhost",
-                key="sb_host_input_main",
-                help="Host domain or IP address of your MySQL database server.",
-            )
-        with col_port:
-            port = st.number_input(
-                "Port",
-                value=st.session_state.conn_config.get("port", 3306),
-                step=1,
-                help="Default MySQL server port is 3306.",
-                key="sb_port_input_main",
-            )
+        host = st.text_input(
+            "Host / IP Address",
+            value=st.session_state.conn_config.get("host", "localhost"),
+            placeholder="localhost",
+            key="sb_host_input_main",
+            help="Host domain or IP address of your MySQL database server.",
+        )
+        port = st.number_input(
+            "Port",
+            value=st.session_state.conn_config.get("port", 3306),
+            min_value=1,
+            max_value=65535,
+            step=1,
+            placeholder="3306",
+            help="MySQL server port (default: 3306)",
+            key="sb_port_input_main",
+        )
 
         # Authentication
         username = st.text_input(
@@ -2798,8 +3142,8 @@ with st.sidebar:
         password = st.text_input(
             "Password",
             type="password",
-            value=st.session_state.conn_config.get("password", "Suyash@para9"),
-            placeholder="(default: Suyash@para9)",
+            value=st.session_state.conn_config.get("password", ""),
+            placeholder="Enter your database password",
             key="sb_pass_input_main",
         )
 
@@ -2814,17 +3158,17 @@ with st.sidebar:
 
         st.markdown('<div style="height: 6px;"></div>', unsafe_allow_html=True)
 
-        # Action Buttons: equal two columns (42px height, no text truncation)
+        # Action Buttons: equal two columns (42px height, matching reference)
         col_test, col_connect = st.columns(2, gap="small")
         with col_test:
             test_btn = st.button(
-                "Test Connection",
+                "▶  Test",
                 use_container_width=True,
                 key="sb_test_main_btn",
             )
         with col_connect:
             connect_btn = st.button(
-                "Connect Database",
+                "🔗  Connect",
                 type="primary",
                 use_container_width=True,
                 key="sb_connect_main_btn",
@@ -2832,31 +3176,19 @@ with st.sidebar:
 
         # Pinned Connection Status Card
         render_sidebar_status_card(connected=False)
-
-    # ── Dark Mode Toggle at Bottom ──────────────────────────────
-    theme_toggle()
-
-    # Sidebar width adjuster
-    new_width = st.sidebar.slider(
-        "Sidebar width",
-        min_value=250,
-        max_value=400,
-        value=st.session_state.get("sidebar_width", 300),
-        step=10,
-        key="sidebar_width_slider",
-        help="Adjust the width of the sidebar",
-    )
-    if new_width != st.session_state.get("sidebar_width", 300):
-        st.session_state.sidebar_width = new_width
-        st.rerun()
+        render_sidebar_bottom_waves()
 
     # --------------------------------------------------------
     # Action Handlers: Test Connection
     # --------------------------------------------------------
     if test_btn:
         if not host or not username:
-            st.error("Host and Username are required.")
-            st.toast("Host and Username are required.", icon="⚠️")
+            show_alert(
+                "Missing Information",
+                "Please enter both Host and Username to test the connection.",
+                alert_type="warning",
+                key="alert_missing_creds"
+            )
         else:
             with st.spinner("Testing connection..."):
                 success, msg = MySQLConnectionManager.test_connection(
@@ -2864,18 +3196,30 @@ with st.sidebar:
                 )
             if success:
                 st.toast("Connection successful!", icon="✅")
-                st.success(f"{msg}")
+                st.success(msg)
             else:
-                st.toast("Connection test failed.", icon="❌")
-                st.error(f"{msg}")
+                if is_credential_error(msg):
+                    render_credential_error_dialog()
+                else:
+                    title, message = parse_connection_error(msg)
+                    show_alert(
+                        title,
+                        message,
+                        alert_type="error",
+                        key="alert_test_failed"
+                    )
 
     # --------------------------------------------------------
     # Action Handlers: Connect
     # --------------------------------------------------------
     if connect_btn:
         if not host or not username:
-            st.error("Host and Username are required.")
-            st.toast("Host and Username are required.", icon="⚠️")
+            show_alert(
+                "Missing Information",
+                "Please enter both Host and Username to connect.",
+                alert_type="warning",
+                key="alert_missing_creds_connect"
+            )
         else:
             with st.spinner("Connecting to MySQL instance..."):
                 success, msg = MySQLConnectionManager.test_connection(
@@ -2905,12 +3249,28 @@ with st.sidebar:
                     st.rerun()
                 except Exception as e:
                     st.session_state.connected = False
-                    st.toast("Failed to initialize engine.", icon="❌")
-                    st.error(f"Failed to initialize engine: {str(e)}")
+                    if is_credential_error(str(e)):
+                        render_credential_error_dialog()
+                    else:
+                        title, message = parse_connection_error(str(e))
+                        show_alert(
+                            title,
+                            message,
+                            alert_type="error",
+                            key="alert_engine_failed"
+                        )
             else:
                 st.session_state.connected = False
-                st.toast("Connection failed.", icon="❌")
-                st.error(f"Connection failed: {msg}")
+                if is_credential_error(msg):
+                    render_credential_error_dialog()
+                else:
+                    title, message = parse_connection_error(msg)
+                    show_alert(
+                        title,
+                        message,
+                        alert_type="error",
+                        key="alert_connect_failed"
+                    )
 
 # ============================================================
 # Inactivity Watchdog Fragment
@@ -3618,8 +3978,7 @@ else:
                     )
                     if existing_tbl_workspaces:
                         num_existing = len(existing_tbl_workspaces)
-                        render_html(
-                            f"""
+                        render_html(f"""
                             <div class="safety-banner" style="border-color: var(--dq-warning-border); background: var(--dq-warning-bg); margin-bottom: 1rem;">
                                 
                                 <div class="safety-banner-content">
@@ -3627,8 +3986,7 @@ else:
                                     <p>An isolated workspace copy for <b><code>{db_name}.{tbl_name}</code></b> was previously created and remains saved in MySQL.</p>
                                 </div>
                             </div>
-                            """
-                        )
+                            """)
 
                         if num_existing == 1:
                             target_ws = existing_tbl_workspaces[0]
@@ -3799,8 +4157,7 @@ else:
                                 st.success(del_msg)
                                 st.rerun()
                     else:
-                        render_html(
-                            f"""
+                        render_html(f"""
                             <div class="safety-banner" style="margin-bottom: 1rem;">
                                 <div class="safety-banner-icon"></div>
                                 <div class="safety-banner-content">
@@ -3808,8 +4165,7 @@ else:
                                     <p>Provision an isolated sandbox copy to safely clean and transform data without modifying production tables.</p>
                                 </div>
                             </div>
-                            """
-                        )
+                            """)
                         btn_s1, btn_s2 = st.columns([1.8, 2.5])
                         with btn_s1:
                             if st.button(
@@ -3852,8 +4208,7 @@ else:
                     # ---------------------------------------------
                     # Sandbox Guarantee Banner
                     # ---------------------------------------------
-                    render_html(
-                        f"""
+                    render_html(f"""
                         <div class="safety-banner">
                             <div class="safety-banner-icon"></div>
                             <div class="safety-banner-content">
@@ -3862,8 +4217,7 @@ else:
                                 Your original source table <b><code>{db_name}.{tbl_name}</code></b> is completely protected and will not be modified.</p>
                             </div>
                         </div>
-                        """
-                    )
+                        """)
 
                     try:
                         workspace_info = get_workspace_info(
@@ -4587,7 +4941,7 @@ else:
 
                             st.markdown(
                                 '<div class="dq-section-title" style="margin-top: 0.5rem;"> Missing Value Cleaning</div>'
-                                "<div class=\"dq-section-caption\">Scan for NULL / missing values, select columns, then replace them in one operation.</div>",
+                                '<div class="dq-section-caption">Scan for NULL / missing values, select columns, then replace them in one operation.</div>',
                                 unsafe_allow_html=True,
                             )
 
@@ -4601,35 +4955,47 @@ else:
 
                             # ---- Scan button ----
                             if not st.session_state.mv_scan_done:
-                                if st.button("Scan and detect", type="secondary", use_container_width=True, key="mv_scan_btn"):
-                                    with st.spinner("Scanning table for missing values..."):
-                                        st.session_state.mv_scan_results = scan_missing_values(engine, db_name, working_tbl)
+                                if st.button(
+                                    "Scan and detect",
+                                    type="secondary",
+                                    use_container_width=True,
+                                    key="mv_scan_btn",
+                                ):
+                                    with st.spinner(
+                                        "Scanning table for missing values..."
+                                    ):
+                                        st.session_state.mv_scan_results = (
+                                            scan_missing_values(
+                                                engine, db_name, working_tbl
+                                            )
+                                        )
                                         st.session_state.mv_scan_done = True
                                         st.session_state.mv_selected_columns = []
                                     st.rerun()
                             else:
                                 scan_results = st.session_state.mv_scan_results
                                 if not scan_results:
-                                    st.info("No supported nullable columns found in this table.")
+                                    st.info(
+                                        "No supported nullable columns found in this table."
+                                    )
                                 else:
-                                    problem_cols = [c for c in scan_results if c["has_issues"]]
+                                    problem_cols = [
+                                        c for c in scan_results if c["has_issues"]
+                                    ]
                                     total_cols = len(scan_results)
 
                                     # Summary banner
                                     if problem_cols:
-                                        render_html(
-                                            f"""
+                                        render_html(f"""
                                             <div class="safety-banner" style="border-color: var(--dq-warning-border); background: var(--dq-warning-bg); margin-bottom: 1rem;">
                                                 <div class="safety-banner-content">
                                                     <h4 style="color: var(--dq-warning);">{len(problem_cols)} of {total_cols} Column(s) Have Missing Values</h4>
                                                     <p>Columns with NULL / blank / whitespace detected.</p>
                                                 </div>
                                             </div>
-                                            """
-                                        )
+                                            """)
                                     else:
-                                        render_html(
-                                            f"""
+                                        render_html(f"""
                                             <div class="safety-banner" style="border-color: var(--dq-success-border); background: var(--dq-success-bg); margin-bottom: 1rem;">
                                                 <div class="safety-banner-icon"></div>
                                                 <div class="safety-banner-content">
@@ -4637,30 +5003,50 @@ else:
                                                     <p>Zero missing values detected.</p>
                                                 </div>
                                             </div>
-                                            """
-                                        )
+                                            """)
 
                                     # Layout: two vertical sections side by side
-                                    left_col, right_col = st.columns([1, 1], gap="large")
+                                    left_col, right_col = st.columns(
+                                        [1, 1], gap="large"
+                                    )
 
                                     # ---------- LEFT: Columns detected ----------
                                     with left_col:
-                                        st.markdown("### Columns detected which have null and missing values")
+                                        st.markdown(
+                                            "### Columns detected which have null and missing values"
+                                        )
                                         # Select all / Deselect all buttons
                                         if problem_cols:
                                             sel_col, desel_col = st.columns(2)
                                             with sel_col:
-                                                if st.button("Select All", key="mv_select_all_btn", use_container_width=True):
-                                                    st.session_state.mv_selected_columns = [c["column"] for c in problem_cols]
+                                                if st.button(
+                                                    "Select All",
+                                                    key="mv_select_all_btn",
+                                                    use_container_width=True,
+                                                ):
+                                                    st.session_state.mv_selected_columns = [
+                                                        c["column"]
+                                                        for c in problem_cols
+                                                    ]
                                                     # also tick the checkboxes
                                                     for c in problem_cols:
-                                                        st.session_state[f"mv_chk_{c['column']}"] = True
+                                                        st.session_state[
+                                                            f"mv_chk_{c['column']}"
+                                                        ] = True
                                                     st.rerun()
                                             with desel_col:
-                                                if st.button("Deselect All", key="mv_deselect_all_btn", use_container_width=True):
-                                                    st.session_state.mv_selected_columns = []
+                                                if st.button(
+                                                    "Deselect All",
+                                                    key="mv_deselect_all_btn",
+                                                    use_container_width=True,
+                                                ):
+                                                    st.session_state.mv_selected_columns = (
+                                                        []
+                                                    )
                                                     for c in problem_cols:
-                                                        st.session_state[f"mv_chk_{c['column']}"] = False
+                                                        st.session_state[
+                                                            f"mv_chk_{c['column']}"
+                                                        ] = False
                                                     st.rerun()
 
                                         for col_info in problem_cols:
@@ -4670,17 +5056,30 @@ else:
                                             n_cnt = col_info["null_count"]
                                             b_cnt = col_info["blank_count"]
                                             tot = col_info["total_missing"]
-                                            checked = c_name in st.session_state.mv_selected_columns
+                                            checked = (
+                                                c_name
+                                                in st.session_state.mv_selected_columns
+                                            )
                                             new_checked = st.checkbox(
-                                                f"`{c_name}` ({data_type}) — {tot:,} missing (NULL:{n_cnt:,}" + (f", blank:{b_cnt:,}" if type_cat=="text" else "") + ")",
+                                                f"`{c_name}` ({data_type}) — {tot:,} missing (NULL:{n_cnt:,}"
+                                                + (
+                                                    f", blank:{b_cnt:,}"
+                                                    if type_cat == "text"
+                                                    else ""
+                                                )
+                                                + ")",
                                                 value=checked,
-                                                key=f"mv_chk_{c_name}"
+                                                key=f"mv_chk_{c_name}",
                                             )
                                             if new_checked != checked:
                                                 if new_checked:
-                                                    st.session_state.mv_selected_columns.append(c_name)
+                                                    st.session_state.mv_selected_columns.append(
+                                                        c_name
+                                                    )
                                                 else:
-                                                    st.session_state.mv_selected_columns.remove(c_name)
+                                                    st.session_state.mv_selected_columns.remove(
+                                                        c_name
+                                                    )
                                                 st.rerun()
 
                                     # ---------- RIGHT: Operational ----------
@@ -4689,32 +5088,50 @@ else:
                                         if st.session_state.mv_selected_columns:
                                             # Show selected columns transparently
                                             st.write("**Selected columns:**")
-                                            for col_name in st.session_state.mv_selected_columns:
+                                            for (
+                                                col_name
+                                            ) in st.session_state.mv_selected_columns:
                                                 st.markdown(f"- `{col_name}`")
                                             scope = st.radio(
                                                 "What to replace",
                                                 options=[
                                                     "Missing values only (empty/whitespace)",
                                                     "NULL values only",
-                                                    "Both missing and NULL"
+                                                    "Both missing and NULL",
                                                 ],
                                                 key="mv_scope_radio",
-                                                horizontal=False
+                                                horizontal=False,
                                             )
                                             repl_text = st.text_input(
                                                 "Replacement value",
                                                 value="N/A",
                                                 key="mv_repl_text",
-                                                help="Examples: N/A, Unknown, 0, 1970-01-01, true"
+                                                help="Examples: N/A, Unknown, 0, 1970-01-01, true",
                                             )
-                                            st.caption("Examples: `N/A`, `Unknown`, `0`, `1970-01-01`, `true`")
-                                            if st.button("Replace All", type="primary", use_container_width=True, key="mv_replace_all_btn"):
+                                            st.caption(
+                                                "Examples: `N/A`, `Unknown`, `0`, `1970-01-01`, `true`"
+                                            )
+                                            if st.button(
+                                                "Replace All",
+                                                type="primary",
+                                                use_container_width=True,
+                                                key="mv_replace_all_btn",
+                                            ):
                                                 # Separate text and non-text columns
                                                 text_cols = []
                                                 nontext_cols = []
-                                                for col_name in list(st.session_state.mv_selected_columns):
-                                                    col_info = next(c for c in scan_results if c["column"] == col_name)
-                                                    if col_info["type_category"] == "text":
+                                                for col_name in list(
+                                                    st.session_state.mv_selected_columns
+                                                ):
+                                                    col_info = next(
+                                                        c
+                                                        for c in scan_results
+                                                        if c["column"] == col_name
+                                                    )
+                                                    if (
+                                                        col_info["type_category"]
+                                                        == "text"
+                                                    ):
                                                         text_cols.append(col_name)
                                                     else:
                                                         nontext_cols.append(col_name)
@@ -4723,30 +5140,44 @@ else:
 
                                                 # 1. Process text columns immediately
                                                 for col_name in text_cols:
-                                                    col_info = next(c for c in scan_results if c["column"] == col_name)
+                                                    col_info = next(
+                                                        c
+                                                        for c in scan_results
+                                                        if c["column"] == col_name
+                                                    )
                                                     target_mode_map = {
                                                         "Missing values only (empty/whitespace)": "blanks",
                                                         "NULL values only": "nulls",
-                                                        "Both missing and NULL": "both"
+                                                        "Both missing and NULL": "both",
                                                     }
                                                     target_mode = target_mode_map[scope]
-                                                    with st.spinner(f"Replacing in `{col_name}`..."):
-                                                        ok, msg, report = replace_blank_values_workspace(
-                                                            engine,
-                                                            db_name,
-                                                            working_tbl,
-                                                            col_name,
-                                                            repl_text,
-                                                            target_mode=target_mode,
+                                                    with st.spinner(
+                                                        f"Replacing in `{col_name}`..."
+                                                    ):
+                                                        ok, msg, report = (
+                                                            replace_blank_values_workspace(
+                                                                engine,
+                                                                db_name,
+                                                                working_tbl,
+                                                                col_name,
+                                                                repl_text,
+                                                                target_mode=target_mode,
+                                                            )
                                                         )
                                                         if ok:
                                                             all_reports.append(report)
-                                                            scope_desc = {"Missing values only (empty/whitespace)": "blank/whitespace values",
-                                                                          "NULL values only": "NULL values",
-                                                                          "Both missing and NULL": "NULL and blank values"}[scope]
-                                                            st.success(f"`{col_name}`: replaced {report.get('values_replaced',0)} {scope_desc} with `{repl_text}`.")
+                                                            scope_desc = {
+                                                                "Missing values only (empty/whitespace)": "blank/whitespace values",
+                                                                "NULL values only": "NULL values",
+                                                                "Both missing and NULL": "NULL and blank values",
+                                                            }[scope]
+                                                            st.success(
+                                                                f"`{col_name}`: replaced {report.get('values_replaced',0)} {scope_desc} with `{repl_text}`."
+                                                            )
                                                         else:
-                                                            st.error(f"`{col_name}`: {msg}")
+                                                            st.error(
+                                                                f"`{col_name}`: {msg}"
+                                                            )
 
                                                 # 2. If there are non‑text columns, ask user what to do with them
                                                 if nontext_cols:
@@ -4756,84 +5187,159 @@ else:
                                                         "scope": scope,
                                                         "repl_text": repl_text,
                                                         "text_reports": all_reports,
-                                                        "step": "awaiting"
+                                                        "step": "awaiting",
                                                     }
                                                     st.rerun()
 
                                                 # 3. No non‑text columns → finalize
                                                 if all_reports:
-                                                    st.session_state.mv_selected_columns = []
-                                                    st.session_state.mv_scan_done = False
+                                                    st.session_state.mv_selected_columns = (
+                                                        []
+                                                    )
+                                                    st.session_state.mv_scan_done = (
+                                                        False
+                                                    )
                                                     st.session_state.mv_cleaning_report = {
                                                         "columns": all_reports,
                                                         "timestamp": datetime.now().isoformat(),
                                                     }
-                                                    st.session_state.profile_result = None
+                                                    st.session_state.profile_result = (
+                                                        None
+                                                    )
                                                     st.rerun()
 
                                             # ---- Confirmation UI for non‑text columns ----
-                                            if "mv_nontext_confirm" in st.session_state and st.session_state.mv_nontext_confirm.get("step") == "awaiting":
-                                                conf = st.session_state.mv_nontext_confirm
-                                                st.warning("The following columns are not text type. Custom text cannot be used to replace NULL/missing values.")
+                                            if (
+                                                "mv_nontext_confirm" in st.session_state
+                                                and st.session_state.mv_nontext_confirm.get(
+                                                    "step"
+                                                )
+                                                == "awaiting"
+                                            ):
+                                                conf = (
+                                                    st.session_state.mv_nontext_confirm
+                                                )
+                                                st.warning(
+                                                    "The following columns are not text type. Custom text cannot be used to replace NULL/missing values."
+                                                )
                                                 decisions = {}
                                                 for col_name in conf["cols"]:
-                                                    col_info = next(c for c in scan_results if c["column"] == col_name)
-                                                    dtype = col_info["data_type"].upper()
-                                                    st.write(f"**{col_name}** ({dtype})")
+                                                    col_info = next(
+                                                        c
+                                                        for c in scan_results
+                                                        if c["column"] == col_name
+                                                    )
+                                                    dtype = col_info[
+                                                        "data_type"
+                                                    ].upper()
+                                                    st.write(
+                                                        f"**{col_name}** ({dtype})"
+                                                    )
                                                     choice = st.radio(
                                                         f"Replace NULLs in `{col_name}` with NULL (keep NULL)?",
-                                                        options=["Yes – keep NULL (no change)", "No – skip this column"],
+                                                        options=[
+                                                            "Yes – keep NULL (no change)",
+                                                            "No – skip this column",
+                                                        ],
                                                         key=f"mv_confirm_{col_name}",
-                                                        horizontal=True
+                                                        horizontal=True,
                                                     )
-                                                    decisions[col_name] = (choice == "Yes – keep NULL (no change)")
+                                                    decisions[col_name] = (
+                                                        choice
+                                                        == "Yes – keep NULL (no change)"
+                                                    )
                                                 col_decide, col_cancel = st.columns(2)
                                                 with col_decide:
-                                                    if st.button("Confirm", key="mv_confirm_ok_btn", type="primary"):
+                                                    if st.button(
+                                                        "Confirm",
+                                                        key="mv_confirm_ok_btn",
+                                                        type="primary",
+                                                    ):
                                                         conf["decisions"] = decisions
                                                         conf["step"] = "confirmed"
                                                         st.rerun()
                                                 with col_cancel:
-                                                    if st.button("Cancel", key="mv_confirm_cancel_btn"):
+                                                    if st.button(
+                                                        "Cancel",
+                                                        key="mv_confirm_cancel_btn",
+                                                    ):
                                                         # Finalize with only text reports
-                                                        text_reports = conf.get("text_reports", [])
-                                                        st.session_state.mv_selected_columns = []
-                                                        st.session_state.mv_scan_done = False
+                                                        text_reports = conf.get(
+                                                            "text_reports", []
+                                                        )
+                                                        st.session_state.mv_selected_columns = (
+                                                            []
+                                                        )
+                                                        st.session_state.mv_scan_done = (
+                                                            False
+                                                        )
                                                         st.session_state.mv_cleaning_report = {
                                                             "columns": text_reports,
                                                             "timestamp": datetime.now().isoformat(),
                                                         }
-                                                        st.session_state.profile_result = None
-                                                        del st.session_state.mv_nontext_confirm
+                                                        st.session_state.profile_result = (
+                                                            None
+                                                        )
+                                                        del (
+                                                            st.session_state.mv_nontext_confirm
+                                                        )
                                                         st.rerun()
                                                 st.stop()
 
                                             # ---- Process non‑text columns after confirmation ----
-                                            if "mv_nontext_confirm" in st.session_state and st.session_state.mv_nontext_confirm.get("step") == "confirmed":
-                                                conf = st.session_state.mv_nontext_confirm
+                                            if (
+                                                "mv_nontext_confirm" in st.session_state
+                                                and st.session_state.mv_nontext_confirm.get(
+                                                    "step"
+                                                )
+                                                == "confirmed"
+                                            ):
+                                                conf = (
+                                                    st.session_state.mv_nontext_confirm
+                                                )
                                                 decisions = conf.get("decisions", {})
-                                                text_reports = conf.get("text_reports", [])
+                                                text_reports = conf.get(
+                                                    "text_reports", []
+                                                )
                                                 all_reports = list(text_reports)
 
                                                 for col_name in conf["cols"]:
-                                                    keep_null = decisions.get(col_name, False)
+                                                    keep_null = decisions.get(
+                                                        col_name, False
+                                                    )
                                                     if keep_null:
                                                         report = {
                                                             "operation": "Missing Value Cleaning",
                                                             "strategy": "keep_null",
                                                             "column": col_name,
-                                                            "data_type": next(c for c in scan_results if c["column"]==col_name)["data_type"],
-                                                            "type_category": next(c for c in scan_results if c["column"]==col_name)["type_category"],
+                                                            "data_type": next(
+                                                                c
+                                                                for c in scan_results
+                                                                if c["column"]
+                                                                == col_name
+                                                            )["data_type"],
+                                                            "type_category": next(
+                                                                c
+                                                                for c in scan_results
+                                                                if c["column"]
+                                                                == col_name
+                                                            )["type_category"],
                                                             "values_replaced": 0,
                                                             "total_values_changed": 0,
                                                         }
                                                         all_reports.append(report)
-                                                        st.info(f"`{col_name}`: kept NULL (no change).")
+                                                        st.info(
+                                                            f"`{col_name}`: kept NULL (no change)."
+                                                        )
                                                     else:
-                                                        st.warning(f"`{col_name}`: skipped as per user choice.")
+                                                        st.warning(
+                                                            f"`{col_name}`: skipped as per user choice."
+                                                        )
 
                                                 # Finalize
-                                                st.session_state.mv_selected_columns = []
+                                                st.session_state.mv_selected_columns = (
+                                                    []
+                                                )
                                                 st.session_state.mv_scan_done = False
                                                 st.session_state.mv_cleaning_report = {
                                                     "columns": all_reports,
@@ -4843,7 +5349,9 @@ else:
                                                 del st.session_state.mv_nontext_confirm
                                                 st.rerun()
                                         else:
-                                            st.info("Select columns on the left to enable replacement options.")
+                                            st.info(
+                                                "Select columns on the left to enable replacement options."
+                                            )
 
                             # Dedicated Missing Value Cleaning Audit Report
                             if st.session_state.get("mv_cleaning_report"):
@@ -4856,10 +5364,14 @@ else:
                                     if not mv_rep.get("columns"):
                                         st.info("No columns were processed.")
                                     else:
-                                        st.success(f"Value replacement successfully committed to `{working_tbl}`.")
+                                        st.success(
+                                            f"Value replacement successfully committed to `{working_tbl}`."
+                                        )
                                         for rep in mv_rep["columns"]:
                                             st.markdown("---")
-                                            st.markdown(f"#### Column: `{rep.get('column', '')}`")
+                                            st.markdown(
+                                                f"#### Column: `{rep.get('column', '')}`"
+                                            )
                                             k1, k2, k3, k4 = st.columns(4)
                                             with k1:
                                                 st.markdown(
@@ -4895,7 +5407,9 @@ else:
                                                     unsafe_allow_html=True,
                                                 )
                                             with k4:
-                                                repl_val = rep.get('replacement_value', '')
+                                                repl_val = rep.get(
+                                                    "replacement_value", ""
+                                                )
                                                 st.markdown(
                                                     f"""
                                                     <div class="kpi-card">

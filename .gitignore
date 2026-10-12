@@ -5,3 +5,11 @@ __pycache__/
 .pytest_cache/
 .env
 *.log
+
+.planning/
+
+# Exclude docs & presentation files
+AGENTS.md
+DataClean_Studio_Project_Documentation.docx
+create_presentation_doc.py
+SVG/

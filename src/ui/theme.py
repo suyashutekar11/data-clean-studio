@@ -1,9 +1,9 @@
 """
-DataClean Studio — Glass Design System  ·  Graphite & Silver Edition
+DataClean Studio — Theme Aliasing
 src/ui/theme.py
 
-Single source of truth alias pointing to styles.py.
+Re-exports inject_theme and inject_glass_theme from ui.theme.
 """
-from styles import inject_glass_theme, _tokens, _build_css
+from ui.theme import inject_theme, inject_glass_theme
 
-__all__ = ["inject_glass_theme"]
+__all__ = ["inject_theme", "inject_glass_theme"]
