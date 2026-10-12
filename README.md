@@ -61,6 +61,12 @@ Traditional approaches either risk modifying production data directly, require c
 
 ---
 
+## Demo
+
+![DataClean Studio Demo](demo.gif)
+
+---
+
 ## Quick Start
 
 ```bash
