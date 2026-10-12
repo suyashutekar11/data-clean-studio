@@ -85,15 +85,9 @@ streamlit run app.py
 > **⚠️ Under Active Development**
 >
 > This is v1.2 Standard. Core staging, profiling, cleaning, and reporting are functional.
-> **More features will be added consequently**, including:
-> - AI-assisted cleaning suggestions (OpenAI integration)
-> - Additional data cleaning procedures: outlier detection & removal, fuzzy matching for near-duplicates, regex-based value replacement, referential integrity validation, column pattern profiling, data type inference and coercion, custom transformation scripts
-> - After successful cleaning in workspace, migrate the cleaned data to the production database (manual or automated promotion)
-> - Scheduled/automated cleaning jobs
-> - Role-based access control (viewer/editor/admin)
-> - Multi-database support (PostgreSQL, SQL Server, BigQuery, Snowflake)
-> - Declarative data quality rules engine (YAML/JSON)
-> - REST API for CI/CD integration
+> **More data cleaning features to be added** in subsequent releases.
+>
+> After successful data cleaning in the workspace, the cleaned data can be migrated to the production database.
 
 See [ROADMAP.md](.planning/ROADMAP.md) for detailed milestones.
 
