@@ -1,3 +1,4 @@
+import html
 import re
 import streamlit as st
 import pandas as pd
@@ -31,6 +32,12 @@ from src.staging import (
     normalize_text_case_workspace,
     count_text_casing_changes,
     get_text_columns,
+    get_text_columns_with_types,
+    scan_special_characters_workspace,
+    clean_special_characters_workspace,
+    CONTROL_CHARS,
+    NON_PRINTABLE_CHARS,
+    COMMON_SPECIAL_CHARS,
     get_date_columns,
     detect_date_like_columns,
     analyze_date_column,
@@ -57,10 +64,21 @@ from src.staging import (
     preview_column_standardization,
     standardize_column,
     get_safe_output_column_name,
+    NumericNormalizationConfig,
+    ValueValidationResult,
+    NumericColumnAnalysis,
+    NumericDetectionClassification,
+    SUPPORTED_NUMERIC_TYPES,
+    NUMBER_FORMATS,
+    get_eligible_text_columns,
+    analyze_numeric_column,
+    scan_table_numeric_candidates,
+    convert_column_to_numeric_workspace,
 )
 from src.profiling import profile_source_table, profile_workspace
 from src.pdf_report import generate_executive_profile_pdf
 from ui.theme import inject_theme
+from ui.main_navigation import render_main_navigation
 from ui.credential_dialog import is_credential_error, render_credential_error_dialog
 from ui.sidebar_view import (
     get_sidebar_css,
@@ -70,6 +88,23 @@ from ui.sidebar_view import (
     render_sidebar_status_card_redesign,
     render_sidebar_bottom_waves,
 )
+from ui.components import (
+    render_sandbox_banner,
+    render_alert,
+    render_page_header,
+    render_badge,
+    render_metric_card,
+    render_saas_breadcrumb,
+    render_module_header,
+    render_section_header,
+    render_data_table,
+)
+from ui.ai_assistant_view import (
+    render_ai_assistant_page,
+    render_ai_config_sidebar,
+    render_ai_assistant_main,
+)
+from ui.ai_column_cleaning_view import render_ai_column_cleaning_view
 
 # ============================================================
 # Page Configuration
@@ -77,7 +112,7 @@ from ui.sidebar_view import (
 
 st.set_page_config(
     page_title="DataClean Studio | MySQL Quality Platform",
-    page_icon="🛡️",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -200,13 +235,14 @@ def show_alert(
     if not st.session_state[alert_key]:
         return
     
-    # Icon mapping
+    # Monoline SVG Icon mapping (18px, 1.75px stroke)
     icons = {
-        "error": "✕",
-        "warning": "⚠",
-        "info": "ℹ",
-        "success": "✓"
+        "error": get_icon_svg("alert_circle", size=20, stroke_width=2.0),
+        "warning": get_icon_svg("alert_triangle", size=20, stroke_width=2.0),
+        "info": get_icon_svg("info", size=20, stroke_width=2.0),
+        "success": get_icon_svg("check_circle_2", size=20, stroke_width=2.0),
     }
+    close_icon_svg = get_icon_svg("x", size=14, stroke_width=2.0)
     
     # Accessible role descriptions
     role_desc = {
@@ -216,7 +252,7 @@ def show_alert(
         "success": "Success alert"
     }
     
-    icon = icons.get(alert_type, "✕")
+    icon = icons.get(alert_type, get_icon_svg("info", size=20, stroke_width=2.0))
     role = role_desc.get(alert_type, "Alert")
     
     render_html(f"""
@@ -225,9 +261,9 @@ def show_alert(
             <div class="dq-alert-header">
                 <div class="dq-alert-icon {alert_type}" aria-hidden="true">{icon}</div>
                 <h3 class="dq-alert-title" id="dq-alert-title-{key}">{title}</h3>
-                <button class="dq-alert-close" onclick="closeAlert('{key}')" aria-label="Dismiss {role.lower()}">✕</button>
+                <button class="dq-alert-close" onclick="closeAlert('{key}')" aria-label="Dismiss {role.lower()}">{close_icon_svg}</button>
             </div>
-<div class="dq-alert-body">
+            <div class="dq-alert-body">
                 <p class="dq-alert-message" id="dq-alert-message-{key}">{message}</p>
             </div>
             <div class="dq-alert-actions">
@@ -1767,97 +1803,316 @@ def inject_global_css(palette: str = "dark") -> None:
     }}
 
     /* ═══════════════════════════════════════════════════════════════
-       WORKSPACE SUB-TAB BAR  — scoped to key "_ws_sub_radio"
-       Professional 4-per-row grid with icon chips
-    ═══════════════════════════════════════════════════════════════ */
-
-    /* Outer wrapper: card with header label */
-    div.st-key-_ws_sub_radio {{
-        background: var(--dq-surface) !important;
+       MAIN NAVIGATION REDESIGN — Scoped to div.st-key-_main_nav_radio
+       =============================================================== */
+    .main-nav-header {{
+        display: flex !important;
+        align-items: center !important;
+        gap: 12px !important;
+        margin-top: 14px !important;
+        margin-bottom: 12px !important;
+    }}
+    .main-nav-accent-bar {{
+        width: 3.5px !important;
+        height: 32px !important;
+        background: #0F766E !important;
+        border-radius: 3px !important;
+        flex-shrink: 0 !important;
+    }}
+    .main-nav-title {{
+        font-size: 15.5px !important;
+        font-weight: 700 !important;
+        color: var(--dq-text-primary) !important;
+        margin: 0 !important;
+        line-height: 1.2 !important;
+        letter-spacing: -0.01em !important;
+    }}
+    .main-nav-subtitle {{
+        font-size: 12.5px !important;
+        color: var(--dq-text-secondary) !important;
+        margin: 3px 0 0 0 !important;
+        line-height: 1.3 !important;
+    }}
+    div.st-key-_main_nav_radio {{
+        background: #F1F5F9 !important;
+        background: linear-gradient(180deg, #F8FAFC 0%, #EEF2F6 100%) !important;
         border: 1px solid var(--dq-border) !important;
-        border-radius: 14px !important;
-        padding: 14px 14px 10px 14px !important;
-        margin-bottom: 20px !important;
-        box-shadow: var(--dq-shadow) !important;
+        border-radius: 16px !important;
+        padding: 10px !important;
+        margin-bottom: 22px !important;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04) !important;
+        box-sizing: border-box !important;
+        width: 100% !important;
     }}
 
-    /* Tab grid container */
-    div.st-key-_ws_sub_radio > div[data-testid="stRadio"] > div {{
+    /* Completely hide Streamlit's internal widget label so 'Main Navigation' is never a card inside the box */
+    div.st-key-_main_nav_radio [data-testid="stWidgetLabel"],
+    div.st-key-_main_nav_radio > label,
+    div.st-key-_main_nav_radio label[data-testid="stWidgetLabel"] {{
+        display: none !important;
+        height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        opacity: 0 !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+        border: none !important;
+        box-shadow: none !important;
+    }}
+
+    /* Inner 2-column grid container */
+    div.st-key-_main_nav_radio div[role="radiogroup"] {{
         display: grid !important;
-        grid-template-columns: repeat(4, 1fr) !important;
-        gap: 6px !important;
+        grid-template-columns: 1fr 1fr !important;
+        gap: 12px !important;
         background: transparent !important;
         border: none !important;
         border-radius: 0 !important;
         padding: 0 !important;
         width: 100% !important;
-        flex-wrap: unset !important;
+        box-sizing: border-box !important;
     }}
 
-    /* Each tab chip */
-    div.st-key-_ws_sub_radio > div[data-testid="stRadio"] label {{
+    /* Base Option Card (label) */
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"] {{
         display: flex !important;
-        flex-direction: column !important;
+        flex-direction: row !important;
         align-items: center !important;
-        justify-content: center !important;
-        gap: 4px !important;
+        justify-content: flex-start !important;
         flex: unset !important;
         min-width: unset !important;
         width: 100% !important;
-        padding: 10px 8px !important;
-        border-radius: 10px !important;
+        padding: 16px 20px !important;
+        border-radius: 12px !important;
         border: 1px solid var(--dq-border) !important;
         background: var(--dq-surface2) !important;
         cursor: pointer !important;
-        font-size: 11px !important;
-        font-weight: 600 !important;
-        color: var(--dq-text-secondary) !important;
-        white-space: normal !important;
-        text-align: center !important;
-        line-height: 1.3 !important;
-        letter-spacing: 0.01em !important;
-        transition: background 160ms ease, color 160ms ease,
-                    border-color 160ms ease, box-shadow 160ms ease,
-                    transform 100ms ease !important;
+        min-height: 82px !important;
+        gap: 14px !important;
+        position: relative !important;
+        box-sizing: border-box !important;
         user-select: none !important;
+        transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1) !important;
     }}
 
-    /* Hover state — lift + accent tint */
-    div.st-key-_ws_sub_radio > div[data-testid="stRadio"] label:hover {{
-        background: var(--dq-accent-glow) !important;
-        border-color: var(--dq-accent-border) !important;
-        color: var(--dq-accent) !important;
-        transform: translateY(-1px) !important;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.10) !important;
-    }}
-
-    /* Active / selected state — solid accent pill */
-    div.st-key-_ws_sub_radio > div[data-testid="stRadio"] label:has(input[type="radio"]:checked) {{
-        background: var(--dq-accent) !important;
-        border-color: var(--dq-accent) !important;
-        color: #FFFFFF !important;
-        font-weight: 700 !important;
-        box-shadow: 0 4px 14px var(--dq-accent-focus) !important;
-        transform: translateY(-1px) !important;
-    }}
-
-    /* Emoji icon — larger, sits on top */
-    div.st-key-_ws_sub_radio > div[data-testid="stRadio"] label span:first-of-type {{
-        font-size: 18px !important;
-        line-height: 1 !important;
-        display: block !important;
-    }}
-
-    /* Hide the native radio dot */
-    div.st-key-_ws_sub_radio > div[data-testid="stRadio"] label > div:first-child {{
+    /* Hide native radio input/circle container */
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label > div:first-child,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"] > div:first-child {{
         display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+        opacity: 0 !important;
+        visibility: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }}
 
-    /* Responsive: collapse to 2-column grid on narrow viewports */
-    @media (max-width: 860px) {{
-        div.st-key-_ws_sub_radio > div[data-testid="stRadio"] > div {{
-            grid-template-columns: repeat(2, 1fr) !important;
+    /* Text Container */
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label > div[data-testid="stMarkdownContainer"],
+    div.st-key-_main_nav_radio label[data-baseweb="radio"] > div[data-testid="stMarkdownContainer"] {{
+        order: 2 !important;
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+        text-align: left !important;
+    }}
+
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label > div[data-testid="stMarkdownContainer"] p,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"] > div[data-testid="stMarkdownContainer"] p {{
+        margin: 0 !important;
+        padding: 0 !important;
+        line-height: 1.35 !important;
+        color: var(--dq-text-secondary) !important;
+        font-size: 12.5px !important;
+        font-weight: 400 !important;
+        text-align: left !important;
+        white-space: normal !important;
+    }}
+
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label > div[data-testid="stMarkdownContainer"] strong,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"] > div[data-testid="stMarkdownContainer"] strong {{
+        display: block !important;
+        font-size: 15px !important;
+        font-weight: 700 !important;
+        color: var(--dq-text-primary) !important;
+        letter-spacing: -0.01em !important;
+        margin-bottom: 2px !important;
+        line-height: 1.25 !important;
+    }}
+
+    /* Icon Containers via ::before (order: 1, on the left) */
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label::before,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"]::before {{
+        content: "" !important;
+        order: 1 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 44px !important;
+        height: 44px !important;
+        min-width: 44px !important;
+        border-radius: 10px !important;
+        flex-shrink: 0 !important;
+        background-repeat: no-repeat !important;
+        background-position: center !important;
+        background-size: 22px 22px !important;
+        transition: all 180ms ease !important;
+    }}
+
+    /* Option 1: Source Table Icon (Teal tinted badge) */
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label:nth-of-type(1)::before,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"]:nth-of-type(1)::before {{
+        background-color: rgba(15, 118, 110, 0.10) !important;
+        border: 1px solid rgba(15, 118, 110, 0.22) !important;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%230F766E' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cellipse cx='12' cy='5' rx='9' ry='3'/%3E%3Cpath d='M3 5V19A9 3 0 0 0 21 19V5'/%3E%3Cpath d='M3 12A9 3 0 0 0 21 12'/%3E%3C/svg%3E") !important;
+    }}
+
+    /* Option 2: Cleaning Workspace Icon (Warm amber tinted badge) */
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label:nth-of-type(2)::before,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"]:nth-of-type(2)::before {{
+        background-color: rgba(217, 119, 6, 0.12) !important;
+        border: 1px solid rgba(217, 119, 6, 0.26) !important;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23D97706' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m18 2 4 4'/%3E%3Cpath d='m15 5 4 4'/%3E%3Cpath d='M13 7 4 16l-1 5 5-1L17 11'/%3E%3Cpath d='M14 14.5a3.5 3.5 0 0 0-5 0'/%3E%3C/svg%3E") !important;
+    }}
+
+    /* Custom Radio Selection Indicator via ::after (order: 3, on the right) */
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label::after,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"]::after {{
+        content: "" !important;
+        order: 3 !important;
+        margin-left: auto !important;
+        width: 20px !important;
+        height: 20px !important;
+        min-width: 20px !important;
+        border-radius: 50% !important;
+        border: 2px solid var(--dq-border) !important;
+        background: #FFFFFF !important;
+        box-sizing: border-box !important;
+        flex-shrink: 0 !important;
+        transition: all 180ms ease !important;
+    }}
+
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label:not(:has(input:checked)):hover,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"]:not(:has(input:checked)):hover {{
+        background: var(--dq-surface) !important;
+        border-color: var(--dq-accent-border) !important;
+        transform: translateY(-1.5px) !important;
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08) !important;
+    }}
+
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label:not(:has(input:checked)):hover::after,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"]:not(:has(input:checked)):hover::after {{
+        border-color: #0F766E !important;
+    }}
+
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label:has(input[type="radio"]:checked),
+    div.st-key-_main_nav_radio label[data-baseweb="radio"]:has(input[type="radio"]:checked) {{
+        background: #FFFFFF !important;
+        background: linear-gradient(135deg, #FFFFFF 0%, #F0FDFA 100%) !important;
+        border: 1.8px solid #0F766E !important;
+        border-bottom: 1.8px solid #0F766E !important;
+        box-shadow: 0 4px 16px rgba(15, 118, 110, 0.12), 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+        transform: translateY(-1px) !important;
+    }}
+
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label:has(input[type="radio"]:checked)::after,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"]:has(input[type="radio"]:checked)::after {{
+        border-color: #0F766E !important;
+        background: #0F766E !important;
+        box-shadow: inset 0 0 0 3.5px #FFFFFF, 0 0 0 3px rgba(15, 118, 110, 0.20) !important;
+    }}
+
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label:has(input[type="radio"]:checked) > div[data-testid="stMarkdownContainer"] strong,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"]:has(input[type="radio"]:checked) > div[data-testid="stMarkdownContainer"] strong {{
+        color: var(--dq-text-primary) !important;
+    }}
+
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label:has(input[type="radio"]:checked) > div[data-testid="stMarkdownContainer"] p,
+    div.st-key-_main_nav_radio label[data-baseweb="radio"]:has(input[type="radio"]:checked) > div[data-testid="stMarkdownContainer"] p {{
+        color: var(--dq-text-secondary) !important;
+    }}
+
+    div.st-key-_main_nav_radio div[role="radiogroup"] > label:has(input:focus-visible),
+    div.st-key-_main_nav_radio label[data-baseweb="radio"]:has(input:focus-visible) {{
+        outline: 2px solid #0F766E !important;
+        outline-offset: 2px !important;
+    }}
+
+    @media (max-width: 900px) {{
+        div.st-key-_main_nav_radio div[role="radiogroup"] > label,
+        div.st-key-_main_nav_radio label[data-baseweb="radio"] {{
+            padding: 14px 16px !important;
+            gap: 12px !important;
+            min-height: 76px !important;
         }}
+        div.st-key-_main_nav_radio div[role="radiogroup"] > label::before,
+        div.st-key-_main_nav_radio label[data-baseweb="radio"]::before {{
+            width: 38px !important;
+            height: 38px !important;
+            min-width: 38px !important;
+            background-size: 20px 20px !important;
+        }}
+        div.st-key-_main_nav_radio div[role="radiogroup"] > label > div[data-testid="stMarkdownContainer"] strong,
+        div.st-key-_main_nav_radio label[data-baseweb="radio"] > div[data-testid="stMarkdownContainer"] strong {{
+            font-size: 14px !important;
+        }}
+        div.st-key-_main_nav_radio div[role="radiogroup"] > label > div[data-testid="stMarkdownContainer"] p,
+        div.st-key-_main_nav_radio label[data-baseweb="radio"] > div[data-testid="stMarkdownContainer"] p {{
+            font-size: 12px !important;
+        }}
+    }}
+
+    @media (max-width: 680px) {{
+        div.st-key-_main_nav_radio div[role="radiogroup"] {{
+            grid-template-columns: 1fr !important;
+            gap: 8px !important;
+        }}
+        div.st-key-_main_nav_radio div[role="radiogroup"] > label,
+        div.st-key-_main_nav_radio label[data-baseweb="radio"] {{
+            padding: 14px 16px !important;
+            min-height: 72px !important;
+        }}
+    }}
+
+    /* ═══════════════════════════════════════════════════════════════
+       WORKSPACE SUB-TAB BAR  — scoped to key "_ws_sub_radio"
+       Primary card styling is dynamically managed by ui.cleaning_tabs
+    ═══════════════════════════════════════════════════════════════ */
+
+    /* Outer wrapper: transparent, no card strip or blank box */
+    div.st-key-_ws_sub_radio {{
+        background: transparent !important;
+        border: none !important;
+        border-radius: 0 !important;
+        padding: 0 !important;
+        margin: 0 0 20px 0 !important;
+        box-shadow: none !important;
+        width: 100% !important;
+        position: relative !important;
+    }}
+
+    /* Completely hide the widget label strip */
+    div.st-key-_ws_sub_radio [data-testid="stWidgetLabel"],
+    div.st-key-_ws_sub_radio label[data-testid="stWidgetLabel"],
+    div.st-key-_ws_sub_radio > div[data-testid="stRadio"] > label:first-child:not([data-baseweb="radio"]) {{
+        display: none !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        max-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        line-height: 0 !important;
+        font-size: 0 !important;
+        visibility: hidden !important;
+        overflow: hidden !important;
+        border: none !important;
+    }}
+
+    div.st-key-_ws_sub_radio > div[data-testid="stRadio"] {{
+        margin: 0 !important;
+        padding: 0 !important;
+        border: none !important;
+        background: transparent !important;
     }}
 
     @media (prefers-reduced-motion: reduce) {{
@@ -2166,27 +2421,280 @@ def inject_global_css(palette: str = "dark") -> None:
     }}
 
     /* ── Breadcrumb navigation bar ────────────────────────────────── */
+    .breadcrumb-nav {{
+        width: 100%;
+        margin: 4px 0 16px 0;
+        display: block;
+    }}
     .breadcrumb-bar {{
-        display: flex;
+        display: inline-flex;
         align-items: center;
         flex-wrap: wrap;
         gap: 4px;
-        margin-bottom: 16px;
+        padding: 6px 12px;
+        background: #F8FAFD;
+        border: 1px solid #DCE5F0;
+        border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(37, 99, 235, 0.04), 0 1px 2px rgba(15, 23, 42, 0.03);
+        font-family: inherit;
+        box-sizing: border-box;
+        max-width: 100%;
+        line-height: 1;
     }}
     .bc-item {{
-        font-size: 12px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 10px 4px 6px;
+        font-size: 13px;
         font-weight: 500;
-        color: var(--dq-slate-muted);
-        cursor: default;
+        color: #172B4D;
+        text-decoration: none !important;
+        border-radius: 8px;
+        border: 1px solid transparent;
+        transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+        white-space: nowrap;
+        user-select: none;
+        vertical-align: middle;
+    }}
+    a.bc-item {{
+        cursor: pointer;
+    }}
+    a.bc-item:hover {{
+        background: #EDF4FE !important;
+        color: #2563EB !important;
+        border-color: rgba(37, 99, 235, 0.15) !important;
+        text-decoration: none !important;
+    }}
+    a.bc-item:focus-visible {{
+        outline: 2px solid #2563EB;
+        outline-offset: 1px;
     }}
     .bc-item.active {{
-        color: var(--dq-text-primary);
-        font-weight: 600;
+        background: #E6F7EF !important;
+        color: #0B6E3A !important;
+        font-weight: 600 !important;
+        border: 1px solid rgba(16, 185, 129, 0.28) !important;
+        padding: 4px 12px 4px 6px;
+        cursor: default;
+    }}
+    .bc-icon {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        border-radius: 6px;
+        flex-shrink: 0;
+        transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+    }}
+    .bc-icon svg {{
+        display: block;
+        width: 14px;
+        height: 14px;
+        pointer-events: none;
+    }}
+    .bc-icon.home,
+    .bc-icon.folder {{
+        background: #EBF3FE;
+        color: #2563EB;
+        border: 1px solid rgba(37, 99, 235, 0.12);
+    }}
+    a.bc-item:hover .bc-icon.home,
+    a.bc-item:hover .bc-icon.folder {{
+        background: #DFEDFE;
+        color: #1D4ED8;
+        border-color: rgba(37, 99, 235, 0.25);
+    }}
+    .bc-icon.document {{
+        background: #EBF3FE;
+        color: #2563EB;
+        border: 1px solid rgba(37, 99, 235, 0.12);
+    }}
+    a.bc-item:hover .bc-icon.document {{
+        background: #DFEDFE;
+        color: #1D4ED8;
+        border-color: rgba(37, 99, 235, 0.25);
+    }}
+    .bc-item.active .bc-icon.document,
+    .bc-item.active .bc-icon.active-icon {{
+        background: #D1F2E2 !important;
+        color: #0B6E3A !important;
+        border: 1px solid rgba(11, 110, 58, 0.18) !important;
     }}
     .bc-sep {{
-        font-size: 12px;
-        color: var(--dq-border);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 26px;
+        color: #94A3B8;
         user-select: none;
+        flex-shrink: 0;
+        margin: 0 1px;
+    }}
+    .bc-sep svg {{
+        display: block;
+        width: 13px;
+        height: 13px;
+        stroke: #94A3B8;
+        pointer-events: none;
+    }}
+    .bc-label {{
+        display: inline-block;
+        max-width: 240px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        vertical-align: middle;
+        letter-spacing: -0.01em;
+    }}
+    @media (max-width: 768px) {{
+        .breadcrumb-bar {{ padding: 5px 8px; gap: 2px; }}
+        .bc-item {{ max-width: 180px; padding: 3px 8px 3px 5px; font-size: 12px; gap: 6px; }}
+        .bc-label {{ max-width: 140px; }}
+        .bc-icon {{ width: 24px; height: 24px; }}
+        .bc-icon svg {{ width: 12px; height: 12px; }}
+        .bc-sep {{ width: 14px; }}
+        .bc-sep svg {{ width: 11px; height: 11px; }}
+    }}
+    @media (max-width: 480px) {{
+        .bc-label {{ max-width: 100px; }}
+        .bc-item {{ max-width: 140px; }}
+    }}
+
+    /* ── Teardown Workspace Buttons (Solid Red with Crisp White Text) ── */
+    div[class*="st-key-teardown_ws_btn_from_source"] button,
+    div[class*="st-key-hub_teardown_ws_btn"] button,
+    div[class*="st-key-hub_teardown_confirm_btn"] button,
+    div[class*="st-key-del_single_ws_btn"] button,
+    div[class*="st-key-del_multi_ws_btn"] button,
+    div[class*="st-key-del_all_tbl_ws_btn"] button,
+    div[class*="st-key-ws_view_del_single_btn"] button,
+    div[class*="st-key-ws_view_del_multi_btn"] button,
+    div[class*="st-key-ws_view_del_all_btn"] button,
+    div[class*="st-key-teardown_ws"] button,
+    div[class*="st-key-hub_teardown_ws"] button,
+    div[class*="st-key-hub_teardown_confirm"] button,
+    div[class*="st-key-del_single_ws"] button,
+    div[class*="st-key-del_multi_ws"] button,
+    div[class*="st-key-del_all_tbl_ws"] button,
+    div[class*="st-key-ws_view_del_"] button {{
+        background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%) !important;
+        background-color: #DC2626 !important;
+        border: 1px solid #B91C1C !important;
+        color: #FFFFFF !important;
+        font-weight: 700 !important;
+        font-size: 14px !important;
+        letter-spacing: 0.015em !important;
+        box-shadow: 0 2px 5px rgba(220, 38, 38, 0.32), 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+        opacity: 1 !important;
+    }}
+    div[class*="st-key-teardown_ws_btn_from_source"] button *,
+    div[class*="st-key-hub_teardown_ws_btn"] button *,
+    div[class*="st-key-hub_teardown_confirm_btn"] button *,
+    div[class*="st-key-del_single_ws_btn"] button *,
+    div[class*="st-key-del_multi_ws_btn"] button *,
+    div[class*="st-key-del_all_tbl_ws_btn"] button *,
+    div[class*="st-key-ws_view_del_single_btn"] button *,
+    div[class*="st-key-ws_view_del_multi_btn"] button *,
+    div[class*="st-key-ws_view_del_all_btn"] button *,
+    div[class*="st-key-teardown_ws"] button *,
+    div[class*="st-key-hub_teardown_ws"] button *,
+    div[class*="st-key-hub_teardown_confirm"] button *,
+    div[class*="st-key-del_single_ws"] button *,
+    div[class*="st-key-del_multi_ws"] button *,
+    div[class*="st-key-del_all_tbl_ws"] button *,
+    div[class*="st-key-ws_view_del_"] button * {{
+        color: #FFFFFF !important;
+        -webkit-text-fill-color: #FFFFFF !important;
+        fill: #FFFFFF !important;
+        font-weight: 700 !important;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35) !important;
+    }}
+    div[class*="st-key-teardown_ws_btn_from_source"] button:hover,
+    div[class*="st-key-hub_teardown_ws_btn"] button:hover,
+    div[class*="st-key-hub_teardown_confirm_btn"] button:hover,
+    div[class*="st-key-del_single_ws_btn"] button:hover,
+    div[class*="st-key-del_multi_ws_btn"] button:hover,
+    div[class*="st-key-del_all_tbl_ws_btn"] button:hover,
+    div[class*="st-key-ws_view_del_single_btn"] button:hover,
+    div[class*="st-key-ws_view_del_multi_btn"] button:hover,
+    div[class*="st-key-ws_view_del_all_btn"] button:hover,
+    div[class*="st-key-teardown_ws"] button:hover,
+    div[class*="st-key-hub_teardown_ws"] button:hover,
+    div[class*="st-key-hub_teardown_confirm"] button:hover,
+    div[class*="st-key-del_single_ws"] button:hover,
+    div[class*="st-key-del_multi_ws"] button:hover,
+    div[class*="st-key-del_all_tbl_ws"] button:hover,
+    div[class*="st-key-ws_view_del_"] button:hover {{
+        background: linear-gradient(135deg, #B91C1C 0%, #991B1B 100%) !important;
+        background-color: #B91C1C !important;
+        border-color: #7F1D1D !important;
+        color: #FFFFFF !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 12px rgba(185, 28, 28, 0.45) !important;
+        filter: brightness(1.06) !important;
+    }}
+    div[class*="st-key-teardown_ws_btn_from_source"] button:hover *,
+    div[class*="st-key-hub_teardown_ws_btn"] button:hover *,
+    div[class*="st-key-hub_teardown_confirm_btn"] button:hover *,
+    div[class*="st-key-del_single_ws_btn"] button:hover *,
+    div[class*="st-key-del_multi_ws_btn"] button:hover *,
+    div[class*="st-key-del_all_tbl_ws_btn"] button:hover *,
+    div[class*="st-key-ws_view_del_single_btn"] button:hover *,
+    div[class*="st-key-ws_view_del_multi_btn"] button:hover *,
+    div[class*="st-key-ws_view_del_all_btn"] button:hover *,
+    div[class*="st-key-teardown_ws"] button:hover *,
+    div[class*="st-key-hub_teardown_ws"] button:hover *,
+    div[class*="st-key-hub_teardown_confirm"] button:hover *,
+    div[class*="st-key-del_single_ws"] button:hover *,
+    div[class*="st-key-del_multi_ws"] button:hover *,
+    div[class*="st-key-del_all_tbl_ws"] button:hover *,
+    div[class*="st-key-ws_view_del_"] button:hover * {{
+        color: #FFFFFF !important;
+        -webkit-text-fill-color: #FFFFFF !important;
+    }}
+    div[class*="st-key-teardown_ws_btn_from_source"] button:active,
+    div[class*="st-key-hub_teardown_ws_btn"] button:active,
+    div[class*="st-key-hub_teardown_confirm_btn"] button:active,
+    div[class*="st-key-del_single_ws_btn"] button:active,
+    div[class*="st-key-del_multi_ws_btn"] button:active,
+    div[class*="st-key-del_all_tbl_ws_btn"] button:active,
+    div[class*="st-key-ws_view_del_single_btn"] button:active,
+    div[class*="st-key-ws_view_del_multi_btn"] button:active,
+    div[class*="st-key-ws_view_del_all_btn"] button:active,
+    div[class*="st-key-teardown_ws"] button:active,
+    div[class*="st-key-hub_teardown_ws"] button:active,
+    div[class*="st-key-hub_teardown_confirm"] button:active,
+    div[class*="st-key-del_single_ws"] button:active,
+    div[class*="st-key-del_multi_ws"] button:active,
+    div[class*="st-key-del_all_tbl_ws"] button:active,
+    div[class*="st-key-ws_view_del_"] button:active {{
+        background: linear-gradient(135deg, #991B1B 0%, #7F1D1D 100%) !important;
+        background-color: #991B1B !important;
+        border-color: #7F1D1D !important;
+        transform: translateY(0px) !important;
+        box-shadow: 0 1px 3px rgba(127, 29, 29, 0.4) !important;
+    }}
+    div[class*="st-key-teardown_ws_btn_from_source"] button:focus,
+    div[class*="st-key-hub_teardown_ws_btn"] button:focus,
+    div[class*="st-key-hub_teardown_confirm_btn"] button:focus,
+    div[class*="st-key-del_single_ws_btn"] button:focus,
+    div[class*="st-key-del_multi_ws_btn"] button:focus,
+    div[class*="st-key-del_all_tbl_ws_btn"] button:focus,
+    div[class*="st-key-ws_view_del_single_btn"] button:focus,
+    div[class*="st-key-ws_view_del_multi_btn"] button:focus,
+    div[class*="st-key-ws_view_del_all_btn"] button:focus,
+    div[class*="st-key-teardown_ws"] button:focus,
+    div[class*="st-key-hub_teardown_ws"] button:focus,
+    div[class*="st-key-hub_teardown_confirm"] button:focus,
+    div[class*="st-key-del_single_ws"] button:focus,
+    div[class*="st-key-del_multi_ws"] button:focus,
+    div[class*="st-key-del_all_tbl_ws"] button:focus,
+    div[class*="st-key-ws_view_del_"] button:focus {{
+        box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.45) !important;
+        outline: none !important;
     }}
 
     /* ── Safety / info banners ────────────────────────────────────── */
@@ -2255,6 +2763,9 @@ def render_app_header(
     port: str | int = "",
     version: str = "v1.2 Standard",
     theme: str = "light",
+    database: Optional[str] = None,
+    table: Optional[str] = None,
+    module: Optional[str] = None,
 ) -> None:
     """Renders HTML for the top navigation bar matching the enterprise pill banner."""
     _render_app_header_impl(
@@ -2263,6 +2774,9 @@ def render_app_header(
         port=port,
         version=version,
         theme=theme,
+        database=database,
+        table=table,
+        module=module,
     )
 
 
@@ -2270,6 +2784,12 @@ def render_hero_welcome() -> None:
     """Renders HTML for the enterprise landing page with 2-column hero, 3D visual, feature cards, and workflow."""
     _render_hero_welcome_impl()
 
+
+from ui.cleaning_tabs import (
+    render_cleaning_tabs,
+    CLEANING_MODULES,
+    CLEANING_TAB_NAMES,
+)
 
 # Theme resolution & Global CSS rules injection
 if "ui_theme" not in st.session_state:
@@ -2303,6 +2823,12 @@ DEFAULT_STATE = {
     "casing_cleaning_report": None,
     "duplicate_cleaning_report": None,
     "duplicate_row_actions": {},
+    "numeric_scan_results": None,
+    "numeric_column_analyses": {},
+    "numeric_selected_col": None,
+    "numeric_manual_mode": False,
+    "numeric_conversion_report": None,
+    "numeric_history": [],
     "active_view": "Source Table",
     "workspace_sub_tab": "🏠 Cleaning Hub",
 }
@@ -2348,6 +2874,12 @@ def reset_workspace_state():
     st.session_state.casing_cleaning_report = None
     st.session_state.duplicate_cleaning_report = None
     st.session_state.duplicate_row_actions = {}
+    st.session_state.numeric_scan_results = None
+    st.session_state.numeric_column_analyses = {}
+    st.session_state.numeric_selected_col = None
+    st.session_state.numeric_manual_mode = False
+    st.session_state.numeric_conversion_report = None
+    st.session_state.numeric_history = []
     st.session_state.workspace_sub_tab = "🏠 Cleaning Hub"
     st.query_params["workspace_sub_tab"] = "🏠 Cleaning Hub"
     if "working_table_name" in st.query_params:
@@ -2374,12 +2906,15 @@ def remove_connection_session():
 
 
 # ============================================================
-# Persistent Connection Restore
+# Persistent Connection Restore (Stored in st.session_state)
 # ============================================================
 
-connection_token = st.query_params.get("connection_token")
+connection_token = st.session_state.get("connection_token") or st.query_params.get("connection_token")
 if isinstance(connection_token, list):
     connection_token = connection_token[0] if connection_token else None
+
+if "connection_token" in st.query_params:
+    del st.query_params["connection_token"]
 
 if (
     connection_token
@@ -2411,8 +2946,12 @@ _CANONICAL_NAV_MAP = {
     "Date Formatting": "📅 Date Formatting",
     "Advanced Date Standardization": "🗓️ Advanced Date Standardization",
     "Boolean Normalization": "☑️ Boolean Normalization",
+    "Special Character Cleaning": "🔣 Special Character Cleaning",
+    "Numeric Data Cleaning": "🔢 Numeric Data Cleaning",
+    "AI Assistant": "🤖 AI Assistant",
+    "AI Column Analysis and Cleaning": "🧠 AI Column Analysis and Cleaning",
 }
-for _nav_key in ("active_view", "workspace_sub_tab", "_ws_sub_radio"):
+for _nav_key in ("active_view", "workspace_sub_tab", "_ws_sub_radio", "_main_nav_radio"):
     if _nav_key in st.session_state and isinstance(st.session_state[_nav_key], str):
         _stripped = re.sub(r"^[\W_]+", "", st.session_state[_nav_key]).strip()
         if _stripped in _CANONICAL_NAV_MAP:
@@ -2427,6 +2966,7 @@ if st.session_state.get("connected") and not st.session_state.get("_qp_restored"
         st.session_state.working_table_name = st.query_params["working_table_name"]
     if "active_view" in st.query_params:
         st.session_state.active_view = st.query_params["active_view"]
+        st.session_state._main_nav_radio = st.query_params["active_view"]
     if "workspace_sub_tab" in st.query_params:
         st.session_state.workspace_sub_tab = st.query_params["workspace_sub_tab"]
         st.session_state._ws_sub_radio = st.query_params["workspace_sub_tab"]
@@ -2530,7 +3070,7 @@ def _on_profile_dialog_dismiss():
 
 
 @st.dialog(
-    "📊 Data Quality Profile", width="large", on_dismiss=_on_profile_dialog_dismiss
+    "Data Quality Profile", width="large", on_dismiss=_on_profile_dialog_dismiss
 )
 def render_data_profile_dialog(engine, db_name: str, tbl_name: str):
     """
@@ -2912,18 +3452,47 @@ host_cfg = st.session_state.conn_config.get("host", "")
 port_cfg = st.session_state.conn_config.get("port", "")
 ui_theme_cfg = st.session_state.get("ui_theme", "dark")
 
-render_app_header(connected=connected, host=host_cfg, port=port_cfg, theme=ui_theme_cfg)
+db_crumb = st.session_state.get("selected_db", "")
+tbl_crumb = st.session_state.get("selected_table", "")
+act_v = st.session_state.get("active_view", "")
+mod_crumb = ""
+if "Cleaning Workspace" in act_v and st.session_state.get("working_table_name"):
+    sub = st.session_state.get("workspace_sub_tab", "")
+    parts = sub.split(" ", 1)
+    mod_crumb = parts[-1] if len(parts) > 1 and not parts[0].isalnum() else sub
+
+render_app_header(
+    connected=connected,
+    host=host_cfg,
+    port=port_cfg,
+    theme=ui_theme_cfg,
+    database=db_crumb,
+    table=tbl_crumb,
+    module=mod_crumb,
+)
 
 
 # ============================================================
 # Sidebar - MySQL Connection Hub (320px Enterprise Surface Panel)
 # ============================================================
 
+# Default database connection button states and form defaults
+test_btn = False
+connect_btn = False
+host = st.session_state.conn_config.get("host", "localhost")
+port = st.session_state.conn_config.get("port", 3306)
+username = st.session_state.conn_config.get("username", "root")
+password = st.session_state.conn_config.get("password", "")
+
 with st.sidebar:
     st.markdown(get_sidebar_css(), unsafe_allow_html=True)
     render_sidebar_brand()
 
-    if st.session_state.connected:
+    if st.session_state.get("workspace_sub_tab") == "🤖 AI Assistant":
+        render_ai_config_sidebar(
+            on_back_to_hub=lambda: nav_to_view("🧹 Cleaning Workspace", "🏠 Cleaning Hub")
+        )
+    elif st.session_state.connected:
         # ── Compact connected controls ──────────────────────────
         _c_host = st.session_state.conn_config.get("host", "")
         _c_port = st.session_state.conn_config.get("port", "")
@@ -2938,17 +3507,7 @@ with st.sidebar:
             except Exception:
                 pass
 
-        if st.button(
-            "Disconnect",
-            use_container_width=True,
-            type="primary",
-            key="sb_disconnect_btn",
-        ):
-            remove_connection_session()
-            st.session_state.active_view = "Source Table"
-            st.rerun()
-
-        with st.expander("🔁 Switch Connection", expanded=False):
+        with st.expander("Switch Connection", expanded=False):
             col_sh, col_sp = st.columns(
                 [2.8, 1.2], gap="small", vertical_alignment="top"
             )
@@ -2976,11 +3535,11 @@ with st.sidebar:
             password = st.text_input(
                 "Password",
                 type="password",
-                value="Suyash@para9",
-                placeholder="(default: Suyash@para9)",
+                value="",
+                placeholder="Enter your database password",
                 key="sb_pass_input",
             )
-            with st.expander("⚙️ Advanced Options", expanded=False):
+            with st.expander("Advanced Options", expanded=False):
                 include_system_dbs = st.checkbox(
                     "Include System Databases",
                     value=False,
@@ -3004,16 +3563,9 @@ with st.sidebar:
                     key="sb_connect_btn",
                 )
 
-        render_sidebar_status_card(
-            connected=True,
-            host=f"{_c_host}:{_c_port}",
-            username=_c_user,
-            server_ver=_server_ver,
-        )
-
         # ── Data Profiling Section ──────────────────────────────
         render_html("""
-        <div class="sidebar-section-header" style="margin-top: 18px;">📊 Data Profiling</div>
+        <div class="sidebar-section-header">Data profiling</div>
         """)
 
         has_selected_table = bool(
@@ -3109,6 +3661,17 @@ with st.sidebar:
                     else:
                         st.session_state.profile_result = None
                         st.sidebar.error(f"{p_msg}")
+
+        # ── Destructive Disconnect Button (Bottom of Sidebar) ───
+        render_html('<div class="sb-disconnect-divider"></div>')
+        if st.button(
+            "Disconnect",
+            use_container_width=True,
+            key="sb_disconnect_btn",
+        ):
+            remove_connection_session()
+            st.session_state.active_view = "Source Table"
+            st.rerun()
     else:
         # ── Full connection form (disconnected) ──────────────────
         render_sidebar_promo_card()
@@ -3147,7 +3710,7 @@ with st.sidebar:
             key="sb_pass_input_main",
         )
 
-        with st.expander("⚙️ Advanced Connection Options", expanded=False):
+        with st.expander("Advanced Connection Options", expanded=False):
             include_system_dbs = st.checkbox(
                 "Include System Databases",
                 value=False,
@@ -3158,24 +3721,22 @@ with st.sidebar:
 
         st.markdown('<div style="height: 6px;"></div>', unsafe_allow_html=True)
 
-        # Action Buttons: equal two columns (42px height, matching reference)
+        # Action Buttons: equal two columns (40px standard height)
         col_test, col_connect = st.columns(2, gap="small")
         with col_test:
             test_btn = st.button(
-                "▶  Test",
+                "Test Connection",
                 use_container_width=True,
                 key="sb_test_main_btn",
             )
         with col_connect:
             connect_btn = st.button(
-                "🔗  Connect",
+                "Connect",
                 type="primary",
                 use_container_width=True,
                 key="sb_connect_main_btn",
             )
 
-        # Pinned Connection Status Card
-        render_sidebar_status_card(connected=False)
         render_sidebar_bottom_waves()
 
     # --------------------------------------------------------
@@ -3195,7 +3756,7 @@ with st.sidebar:
                     host, int(port), username, password
                 )
             if success:
-                st.toast("Connection successful!", icon="✅")
+                st.toast("Connection successful!")
                 st.success(msg)
             else:
                 if is_credential_error(msg):
@@ -3239,12 +3800,13 @@ with st.sidebar:
                         "port": int(port),
                         "username": username,
                     }
-                    st.query_params["connection_token"] = token
+                    if "connection_token" in st.query_params:
+                        del st.query_params["connection_token"]
                     st.session_state.selected_db = None
                     st.session_state.selected_table = None
                     reset_workspace_state()
                     st.session_state.active_view = "Source Table"
-                    st.toast("Connected to MySQL instance!", icon="🚀")
+                    st.toast("Connected to MySQL instance!")
                     st.success("Successfully connected!")
                     st.rerun()
                 except Exception as e:
@@ -3306,6 +3868,50 @@ if not st.session_state.connected:
 
 else:
     engine = st.session_state.engine
+    # ── Handle Breadcrumb Navigation Actions ────────────────────
+    _bc_action = st.query_params.get("bc_nav")
+    if _bc_action:
+        if isinstance(_bc_action, list):
+            _bc_action = _bc_action[0] if _bc_action else ""
+        try:
+            del st.query_params["bc_nav"]
+        except Exception:
+            pass
+        if _bc_action == "home":
+            st.session_state.selected_db = None
+            st.session_state.selected_table = None
+            if "selected_db" in st.query_params:
+                try:
+                    del st.query_params["selected_db"]
+                except Exception:
+                    pass
+            if "selected_table" in st.query_params:
+                try:
+                    del st.query_params["selected_table"]
+                except Exception:
+                    pass
+            st.session_state.source_profile_result = None
+            reset_workspace_state()
+            st.session_state.active_view = "Source Table"
+            st.query_params["active_view"] = "Source Table"
+            st.rerun()
+        elif _bc_action == "db":
+            st.session_state.selected_table = None
+            if "selected_table" in st.query_params:
+                try:
+                    del st.query_params["selected_table"]
+                except Exception:
+                    pass
+            st.session_state.source_profile_result = None
+            reset_workspace_state()
+            st.session_state.active_view = "Source Table"
+            st.query_params["active_view"] = "Source Table"
+            st.rerun()
+        elif _bc_action == "table":
+            st.session_state.active_view = "Source Table"
+            st.query_params["active_view"] = "Source Table"
+            st.rerun()
+
 
     # ---------------------------------------------------------
     # Database Discovery
@@ -3330,8 +3936,7 @@ else:
         # Step 2: Source Selection Cards
         # =====================================================
         st.markdown(
-            '<div class="dq-eyebrow">STAGE 1 &amp; 2 DISCOVERY</div>'
-            '<div class="dq-section-title"> Source Database &amp; Table Selection</div>',
+            '<div class="dq-section-title"> Source Database & Table Selection</div>',
             unsafe_allow_html=True,
         )
 
@@ -3449,59 +4054,10 @@ else:
                             "working_table_name"
                         ]
 
-            st.markdown(
-                "<div style='margin-top: 0.75rem;'></div>", unsafe_allow_html=True
-            )
 
-            # ── Breadcrumb trail ────────────────────────────────────
-            _ws_name_for_crumb = st.session_state.get("working_table_name") or ""
-            _active_sub_for_crumb = st.session_state.get("workspace_sub_tab", "")
-            _crumb_view = st.session_state.get("active_view", "Source Table")
-            _crumb_sub = (
-                _active_sub_for_crumb.split(" ", 1)[-1]  # strip emoji
-                if _crumb_view == "🧹 Cleaning Workspace" and _ws_name_for_crumb
-                else ""
-            )
 
-            _crumb_parts = [
-                f'<span class="bc-item">DataClean Studio</span>',
-                f'<span class="bc-sep">›</span>',
-                f'<span class="bc-item">{db_name}</span>',
-                f'<span class="bc-sep">›</span>',
-                f'<span class="bc-item{"" if _crumb_sub else " active"}">{tbl_name}</span>',
-            ]
-            if _crumb_sub:
-                _crumb_parts += [
-                    f'<span class="bc-sep">›</span>',
-                    f'<span class="bc-item active">{_crumb_sub}</span>',
-                ]
-
-            st.markdown(
-                f'<div class="breadcrumb-bar">{"".join(_crumb_parts)}</div>',
-                unsafe_allow_html=True,
-            )
-
-            # ── Outer navigation: Browser Tab Styled Radio ───────────────────
-            _nav_options = [
-                "Source Table",
-                "🧹 Cleaning Workspace",
-            ]
-            if st.session_state.active_view not in _nav_options:
-                st.session_state.active_view = "Source Table"
-
-            selected_view = st.radio(
-                "Main Navigation",
-                options=_nav_options,
-                index=_nav_options.index(st.session_state.active_view),
-                horizontal=True,
-                label_visibility="collapsed",
-            )
-            if selected_view != st.session_state.active_view:
-                st.session_state.active_view = selected_view
-                st.query_params["active_view"] = selected_view
-                st.rerun()
-
-            active_view = st.session_state.active_view
+            # ── Outer navigation: Redesigned Enterprise Main Navigation ──────
+            active_view = render_main_navigation()
 
             st.markdown(
                 "<div style='margin-bottom:0.5rem;'></div>", unsafe_allow_html=True
@@ -3520,7 +4076,7 @@ else:
                             <div class="dq-section-caption">Original production table. Operating in strict read-only mode to prevent data corruption.</div>
                         </div>
                         <div>
-                            <span class="badge-pill badge-info">🔒 Source Read-Only</span>
+                            <span class="badge-pill badge-info">Source Read-Only</span>
                         </div>
                     </div>
                     """,
@@ -3539,11 +4095,14 @@ else:
                 with st.container(border=True):
                     if st.session_state.working_table_name:
                         working_tbl = st.session_state.working_table_name
-                        st.success(f"Cleaning workspace is active: `{working_tbl}`")
-                        st.caption(
-                            "All cleaning and transformations are performed inside this isolated workspace. "
-                            "Your source table remains protected."
+                        _ws_details = st.session_state.get("working_table_details") or {}
+                        _ws_row_count = _ws_details.get("row_count")
+                        render_sandbox_banner(
+                            working_table=working_tbl,
+                            source_table=f"{db_name}.{tbl_name}",
+                            row_count=_ws_row_count,
                         )
+                        st.markdown("<div style='margin-bottom: 0.75rem;'></div>", unsafe_allow_html=True)
                         btn_c1, btn_c2 = st.columns([1.5, 1.5])
                         with btn_c1:
                             if st.button(
@@ -3639,7 +4198,7 @@ else:
                                             st.error(msg)
                                 with col_act2:
                                     if st.button(
-                                        "Teardown Table",
+                                        "Teardown Workspace",
                                         type="primary",
                                         use_container_width=True,
                                         key="del_single_ws_btn",
@@ -4033,7 +4592,7 @@ else:
                                         st.error(msg)
                             with col_act2:
                                 if st.button(
-                                    "Teardown Table",
+                                    "Teardown Workspace",
                                     type="primary",
                                     use_container_width=True,
                                     key="ws_view_del_single_btn",
@@ -4205,20 +4764,6 @@ else:
                 else:
                     working_tbl = st.session_state.working_table_name
 
-                    # ---------------------------------------------
-                    # Sandbox Guarantee Banner
-                    # ---------------------------------------------
-                    render_html(f"""
-                        <div class="safety-banner">
-                            <div class="safety-banner-icon"></div>
-                            <div class="safety-banner-content">
-                                <h4>Safe Sandbox Active: <span class="mono">{working_tbl}</span></h4>
-                                <p>All cleaning, transformations, and profiling run exclusively inside this copy. 
-                                Your original source table <b><code>{db_name}.{tbl_name}</code></b> is completely protected and will not be modified.</p>
-                            </div>
-                        </div>
-                        """)
-
                     try:
                         workspace_info = get_workspace_info(
                             engine, db_name, working_tbl
@@ -4227,452 +4772,167 @@ else:
                         workspace_info = None
                         st.error(f"Error reading workspace: {str(e)}")
 
+                    # ---------------------------------------------
+                    # Sandbox Guarantee Banner (Slim Info Strip)
+                    # ---------------------------------------------
+                    _ws_row_count = workspace_info.get("row_count") if workspace_info else None
+                    render_sandbox_banner(
+                        working_table=working_tbl,
+                        source_table=f"{db_name}.{tbl_name}",
+                        row_count=_ws_row_count,
+                    )
+
                     if workspace_info:
-                        ws_sub_options = [
-                            "🏠 Cleaning Hub",
-                            "✂️ Whitespace Cleaning",
-                            "📝 Blank & NULL Values",
-                            "🔤 Text Casing",
-                            "🔁 Duplicate Handling",
-                            "📅 Date Formatting",
-                            "🗓️ Advanced Date Standardization",
-                            "☑️ Boolean Normalization",
-                        ]
-
-                        current_sub = st.session_state.get(
-                            "workspace_sub_tab", "🏠 Cleaning Hub"
-                        )
-                        if current_sub not in ws_sub_options:
-                            current_sub = "🏠 Cleaning Hub"
-                            st.session_state.workspace_sub_tab = current_sub
-
-                        if st.session_state.get("_ws_sub_radio") != current_sub:
-                            st.session_state._ws_sub_radio = current_sub
-
-                        def _on_ws_sub_radio_change():
-                            chosen = st.session_state._ws_sub_radio
-                            st.session_state.workspace_sub_tab = chosen
-                            st.query_params["workspace_sub_tab"] = chosen
-
-                        # ── Professional tab-bar header ──────────────────
-                        st.markdown(
-                            """
-                            <div style="
-                                display:flex; align-items:center; gap:10px;
-                                margin-bottom:10px;">
-                                <div style="
-                                    font-size:11px; font-weight:700;
-                                    text-transform:uppercase; letter-spacing:0.1em;
-                                    color:var(--dq-text-muted);">
-                                    CLEANING TOOLS
-                                </div>
-                                <div style="
-                                    flex:1; height:1px;
-                                    background:var(--dq-border);"></div>
-                                <div style="
-                                    font-size:10px; font-weight:500;
-                                    color:var(--dq-text-muted);
-                                    background:var(--dq-surface2);
-                                    border:1px solid var(--dq-border);
-                                    border-radius:9999px;
-                                    padding:2px 10px;">
-                                    8 modules
-                                </div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-
-                        selected_sub = st.radio(
-                            "Workspace Sub Tabs",
-                            options=ws_sub_options,
-                            key="_ws_sub_radio",
-                            on_change=_on_ws_sub_radio_change,
-                            horizontal=True,
-                            label_visibility="collapsed",
-                        )
-                        st.session_state.workspace_sub_tab = selected_sub
-                        active_sub = selected_sub
+                        _ai_page_rendered = False
+                        if st.session_state.get("workspace_sub_tab") == "🤖 AI Assistant":
+                            render_ai_assistant_main(
+                                on_back_to_hub=lambda: nav_to_view("🧹 Cleaning Workspace", "🏠 Cleaning Hub")
+                            )
+                            _ai_page_rendered = True
+                            active_sub = "🤖 AI Assistant"
+                        else:
+                            active_sub = render_cleaning_tabs()
 
                         # =========================================
                         # SUB-VIEW 1: Overview & Cleaning Hub
                         # =========================================
                         if active_sub == "🏠 Cleaning Hub":
-                            st.markdown(
-                                '<div class="dq-eyebrow">WORKSPACE OVERVIEW</div>'
-                                '<div class="dq-section-title"> Workspace Metrics</div>',
-                                unsafe_allow_html=True,
-                            )
+                            render_section_header("Workspace metrics")
 
                             details = (
                                 st.session_state.get("working_table_details") or {}
                             )
                             src_rows = details.get("source_row_count", 0)
-                            work_rows = workspace_info.get("row_count", 0)
-                            col_count = len(workspace_info.get("schema", []))
+                            # If src_rows <= 0, attempt to query the real source table baseline count
+                            if src_rows <= 0 and engine and db_name:
+                                try:
+                                    src_tbl_guess = details.get("source_table") or tbl_name
+                                    q_src = _quote_table(db_name, src_tbl_guess)
+                                    with engine.connect() as _c:
+                                        _res = _c.execute(text(f"SELECT COUNT(*) FROM {q_src}"))
+                                        src_rows = _res.scalar() or 0
+                                        details["source_row_count"] = src_rows
+                                        st.session_state.working_table_details = details
+                                except Exception:
+                                    src_rows = 0
 
-                            k1, k2, k3 = st.columns(3)
-                            with k1:
-                                st.markdown(
-                                    f"""
-                                    <div class="kpi-card">
-                                        <div class="kpi-label">Source Rows</div>
-                                        <div class="kpi-value">{src_rows:,}</div>
-                                        <div class="kpi-subtext">Original baseline count</div>
-                                    </div>
-                                    """,
-                                    unsafe_allow_html=True,
-                                )
-                            with k2:
-                                st.markdown(
-                                    f"""
-                                    <div class="kpi-card kpi-card-success">
-                                        <div class="kpi-label">Working Copy Rows</div>
-                                        <div class="kpi-value">{work_rows:,}</div>
-                                        <div class="kpi-subtext">Active in sandbox</div>
-                                    </div>
-                                    """,
-                                    unsafe_allow_html=True,
-                                )
-                            with k3:
-                                st.markdown(
-                                    f"""
-                                    <div class="kpi-card">
-                                        <div class="kpi-label">Schema Columns</div>
-                                        <div class="kpi-value">{col_count}</div>
-                                        <div class="kpi-subtext">Available for transformations</div>
-                                    </div>
-                                    """,
-                                    unsafe_allow_html=True,
-                                )
+                            work_rows = workspace_info.get("row_count", 0)
+
+                            # Hide internal columns starting with '__' (e.g. __bool_backup_is_active)
+                            def _is_internal_col(c):
+                                if isinstance(c, dict):
+                                    col_name = (
+                                        c.get("Column Name")
+                                        or c.get("column_name")
+                                        or c.get("COLUMN_NAME")
+                                        or c.get("name")
+                                        or ""
+                                    )
+                                else:
+                                    col_name = str(c or "")
+                                return str(col_name).startswith("__")
+
+                            visible_schema = [
+                                c for c in workspace_info.get("schema", [])
+                                if not _is_internal_col(c)
+                            ]
+                            col_count = len(visible_schema)
+
+                            # If source row count is valid, display all 3 cards; if not available, hide Source Rows
+                            if src_rows > 0:
+                                k1, k2, k3 = st.columns(3)
+                                with k1:
+                                    render_metric_card(
+                                        "Source Rows",
+                                        src_rows,
+                                        hint="Original baseline count",
+                                    )
+                                with k2:
+                                    render_metric_card(
+                                        "Working Copy Rows",
+                                        work_rows,
+                                        hint="Active in sandbox",
+                                    )
+                                with k3:
+                                    render_metric_card(
+                                        "Schema Columns",
+                                        col_count,
+                                        hint="Available for transformations",
+                                    )
+                            else:
+                                k1, k2 = st.columns(2)
+                                with k1:
+                                    render_metric_card(
+                                        "Working Copy Rows",
+                                        work_rows,
+                                        hint="Active in sandbox",
+                                    )
+                                with k2:
+                                    render_metric_card(
+                                        "Schema Columns",
+                                        col_count,
+                                        hint="Available for transformations",
+                                    )
 
                             # Workspace Data Preview
-                            prev_col1, prev_col2 = st.columns([4, 1])
+                            prev_col1, prev_col2 = st.columns([3.2, 1.4], vertical_alignment="center")
                             with prev_col1:
-                                st.markdown(
-                                    '<div class="dq-section-title" style="margin-top: 1.25rem;"> Workspace Data Preview</div>',
-                                    unsafe_allow_html=True,
+                                render_html(
+                                    '<div class="dc-preview-header">'
+                                    '<h2 class="dc-section-title">Workspace data preview</h2>'
+                                    "</div>"
                                 )
                             with prev_col2:
                                 if st.button(
-                                    "Refresh Preview",
-                                    use_container_width=True,
+                                    "Refresh preview",
+                                    use_container_width=False,
                                     key="hub_refresh_preview_btn",
                                     help="Re-fetch latest data from workspace after cleaning operations",
                                 ):
                                     st.rerun()
-                            with st.container(border=True):
-                                if not workspace_info["preview"].empty:
-                                    st.dataframe(
-                                        workspace_info["preview"],
-                                        use_container_width=True,
-                                        hide_index=True,
-                                    )
-                                else:
-                                    st.info(
-                                        "The cleaning workspace currently has no rows."
-                                    )
 
-                            # Cleaning Operations Hub Catalog
-                            st.markdown(
-                                '<div class="dq-section-title" style="margin-top: 1.5rem;"> Automated Cleaning Operations Hub</div>'
-                                '<div class="dq-section-caption">Select an operation below to open its dedicated workspace tab, configure transformations, and review execution reports.</div>',
-                                unsafe_allow_html=True,
-                            )
-
-                            # Operation 1: Whitespace Card
-                            with st.container(border=True):
-                                op_col1, op_col2 = st.columns([3, 1.3])
-                                with op_col1:
-                                    ws_status_badge = (
-                                        f'<div style="margin-top: 0.45rem;"><span class="badge-pill badge-success"> Executed ({st.session_state.cleaning_report.get("total_values_changed", 0):,} cleaned)</span></div>'
-                                        if st.session_state.get("cleaning_report")
-                                        else ""
-                                    )
-                                    st.markdown(
-                                        f"""
-                                        <div style="font-weight: 700; font-size: 1rem; color: var(--dq-slate);">
-                                             Whitespace Normalization &amp; Trimming
-                                        </div>
-                                        <div style="font-size: 0.85rem; color: var(--dq-slate-muted); margin-top: 0.25rem;">
-                                            Strips leading/trailing whitespace, tabs, and carriage returns, and collapses irregular multi-spaces into single spaces across all text columns.
-                                        </div>
-                                        {ws_status_badge}
-                                        """,
-                                        unsafe_allow_html=True,
-                                    )
-                                with op_col2:
-                                    if st.button(
-                                        "Open Whitespace Cleaner →",
-                                        type="secondary",
-                                        use_container_width=True,
-                                        key="hub_open_whitespace_btn",
-                                    ):
-                                        nav_to_view(
-                                            "🧹 Cleaning Workspace",
-                                            "✂️ Whitespace Cleaning",
-                                        )
-                                        st.rerun()
-
-                            # Operation 2: Blank / NULL Values Card
-                            with st.container(border=True):
-                                b_col1, b_col2 = st.columns([3, 1.3])
-                                with b_col1:
-                                    if st.session_state.get("blank_cleaning_report"):
-                                        b_cnt_done = (
-                                            st.session_state.blank_cleaning_report.get(
-                                                "values_replaced", 0
-                                            )
-                                        )
-                                        b_status_badge = f'<div style="margin-top: 0.45rem;"><span class="badge-pill badge-success"> Executed ({b_cnt_done:,} values replaced)</span></div>'
-                                    else:
-                                        b_status_badge = ""
-
-                                    st.markdown(
-                                        f"""
-                                        <div style="font-weight: 700; font-size: 1rem; color: var(--dq-slate);">
-                                             Blank / Empty &amp; NULL Value Replacement
-                                        </div>
-                                        <div style="font-size: 0.85rem; color: var(--dq-slate-muted); margin-top: 0.25rem;">
-                                            Detect missing values (empty strings <code>''</code> or SQL <code>NULL</code>) in text columns with automated scanning, smart highlighting of affected columns, and customized replacement.
-                                        </div>
-                                        {b_status_badge}
-                                        """,
-                                        unsafe_allow_html=True,
-                                    )
-                                with b_col2:
-                                    if st.button(
-                                        "Open Blank & NULL Cleaner →",
-                                        type="secondary",
-                                        use_container_width=True,
-                                        key="hub_open_blanks_btn",
-                                    ):
-                                        nav_to_view(
-                                            "🧹 Cleaning Workspace",
-                                            "📝 Blank & NULL Values",
-                                        )
-                                        st.rerun()
-
-                            # Operation 3: Text Casing Normalization Card
-                            with st.container(border=True):
-                                tc_col1, tc_col2 = st.columns([3, 1.3])
-                                with tc_col1:
-                                    if st.session_state.get("casing_cleaning_report"):
-                                        tc_cnt_done = (
-                                            st.session_state.casing_cleaning_report.get(
-                                                "values_changed", 0
-                                            )
-                                        )
-                                        tc_status_badge = f'<div style="margin-top: 0.45rem;"><span class="badge-pill badge-success"> Executed ({tc_cnt_done:,} values changed)</span></div>'
-                                    else:
-                                        tc_status_badge = ""
-
-                                    st.markdown(
-                                        f"""
-                                        <div style="font-weight: 700; font-size: 1rem; color: var(--dq-slate);">
-                                             🔤 Text Casing Normalization
-                                        </div>
-                                        <div style="font-size: 0.85rem; color: var(--dq-slate-muted); margin-top: 0.25rem;">
-                                            Normalize text values to lowercase, uppercase, or title case across selected text columns.
-                                        </div>
-                                        {tc_status_badge}
-                                        """,
-                                        unsafe_allow_html=True,
-                                    )
-                                with tc_col2:
-                                    if st.button(
-                                        "Open Text Casing Cleaner →",
-                                        type="secondary",
-                                        use_container_width=True,
-                                        key="hub_open_casing_btn",
-                                    ):
-                                        nav_to_view(
-                                            "🧹 Cleaning Workspace",
-                                            "🔤 Text Casing",
-                                        )
-                                        st.rerun()
-
-                            # Operation 4: Duplicate Handling Card
-                            with st.container(border=True):
-                                dup_col1, dup_col2 = st.columns([3, 1.3])
-                                with dup_col1:
-                                    if st.session_state.get(
-                                        "duplicate_cleaning_report"
-                                    ):
-                                        dup_cnt_done = st.session_state.duplicate_cleaning_report.get(
-                                            "rows_removed", 0
-                                        )
-                                        dup_status_badge = f'<div style="margin-top: 0.45rem;"><span class="badge-pill badge-success"> Executed ({dup_cnt_done:,} rows removed)</span></div>'
-                                    else:
-                                        dup_status_badge = ""
-
-                                    st.markdown(
-                                        f"""
-                                        <div style="font-weight: 700; font-size: 1rem; color: var(--dq-slate);">
-                                             Duplicate Handling
-                                        </div>
-                                        <div style="font-size: 0.85rem; color: var(--dq-slate-muted); margin-top: 0.25rem;">
-                                            Detect and remove duplicate records using one or more selected columns as the duplicate key.
-                                        </div>
-                                        {dup_status_badge}
-                                        """,
-                                        unsafe_allow_html=True,
-                                    )
-                                with dup_col2:
-                                    if st.button(
-                                        "Open Duplicate Cleaner",
-                                        type="secondary",
-                                        use_container_width=True,
-                                        key="hub_open_duplicates_btn",
-                                    ):
-                                        nav_to_view(
-                                            "🧹 Cleaning Workspace",
-                                            "🔁 Duplicate Handling",
-                                        )
-                                        st.rerun()
-
-                            # Operation 5: Date Formatting Card
-                            with st.container(border=True):
-                                dt_col1, dt_col2 = st.columns([3, 1.3])
-                                with dt_col1:
-                                    if st.session_state.get("date_cleaning_report"):
-                                        dt_cnt_done = (
-                                            st.session_state.date_cleaning_report.get(
-                                                "values_formatted", 0
-                                            )
-                                        )
-                                        dt_status_badge = f'<div style="margin-top: 0.45rem;"><span class="badge-pill badge-success"> Executed ({dt_cnt_done:,} dates formatted)</span></div>'
-                                    else:
-                                        dt_status_badge = ""
-
-                                    st.markdown(
-                                        f"""
-                                        <div style="font-weight: 700; font-size: 1rem; color: var(--dq-slate);">
-                                             Date Detection &amp; Standardization
-                                        </div>
-                                        <div style="font-size: 0.85rem; color: var(--dq-slate-muted); margin-top: 0.25rem;">
-                                            Auto-detect date-like text columns and mixed date formats, resolve day/month ambiguities, and standardize into a uniform target format.
-                                        </div>
-                                        {dt_status_badge}
-                                        """,
-                                        unsafe_allow_html=True,
-                                    )
-                                with dt_col2:
-                                    if st.button(
-                                        "Open Date Formatter →",
-                                        type="secondary",
-                                        use_container_width=True,
-                                        key="hub_open_dates_btn",
-                                    ):
-                                        nav_to_view(
-                                            "🧹 Cleaning Workspace",
-                                            "📅 Date Formatting",
-                                        )
-                                        st.rerun()
-
-                            # Operation 5B: Advanced Date Standardization Card
-                            with st.container(border=True):
-                                ads_col1, ads_col2 = st.columns([3, 1.3])
-                                with ads_col1:
-                                    if st.session_state.get("adv_date_std_report"):
-                                        ads_conv = (
-                                            st.session_state.adv_date_std_report.get(
-                                                "successfully_converted", 0
-                                            )
-                                        )
-                                        ads_out_c = (
-                                            st.session_state.adv_date_std_report.get(
-                                                "output_column", ""
-                                            )
-                                        )
-                                        ads_badge = f'<div style="margin-top: 0.45rem;"><span class="badge-pill badge-success">Completed ({ads_conv:,} converted → {ads_out_c})</span></div>'
-                                    else:
-                                        ads_badge = ""
-                                    st.markdown(
-                                        f"""
-                                        <div style="font-weight: 700; font-size: 1rem; color: var(--dq-slate);">
-                                            🗓️ Advanced Date Standardization
-                                        </div>
-                                        <div style="font-size: 0.85rem; color: var(--dq-slate-muted); margin-top: 0.25rem;">
-                                            Scan VARCHAR/TEXT columns for hidden date values (Text Month Rule & Numeric Date Rule), standardize into a new column, and set ambiguous/invalid records to NULL.
-                                        </div>
-                                        {ads_badge}
-                                        """,
-                                        unsafe_allow_html=True,
-                                    )
-                                with ads_col2:
-                                    if st.button(
-                                        "Advanced Date Standardization Cleaning Method",
-                                        type="secondary",
-                                        use_container_width=True,
-                                        key="hub_open_adv_dates_btn",
-                                    ):
-                                        nav_to_view(
-                                            "🧹 Cleaning Workspace",
-                                            "🗓️ Advanced Date Standardization",
-                                        )
-                                        st.rerun()
-
-                            # Operation 6: Boolean Normalization Card
-                            with st.container(border=True):
-                                bn_col1, bn_col2 = st.columns([3, 1.3])
-                                with bn_col1:
-                                    bn_status_badge = (
-                                        f'<div style="margin-top: 0.45rem;"><span class="badge-pill badge-success"> Executed ({len(st.session_state.bool_history)} columns normalized)</span></div>'
-                                        if st.session_state.get("bool_history")
-                                        else ""
-                                    )
-                                    st.markdown(
-                                        f"""
-                                        <div style="font-weight: 700; font-size: 1rem; color: var(--dq-slate);">
-                                             ☑️ Boolean / Yes-No Normalization
-                                        </div>
-                                        <div style="font-size: 0.85rem; color: var(--dq-slate-muted); margin-top: 0.25rem;">
-                                            Detect boolean-like text columns (true/false, yes/no, 1/0, y/n, t/f) with confidence scoring and normalize them into a single standard representation.
-                                        </div>
-                                        {bn_status_badge}
-                                        """,
-                                        unsafe_allow_html=True,
-                                    )
-                                with bn_col2:
-                                    if st.button(
-                                        "Open Boolean Cleaner →",
-                                        type="secondary",
-                                        use_container_width=True,
-                                        key="hub_open_bool_btn",
-                                    ):
-                                        nav_to_view(
-                                            "🧹 Cleaning Workspace",
-                                            "☑️ Boolean Normalization",
-                                        )
-                                        st.rerun()
+                            if not workspace_info["preview"].empty:
+                                preview_df = workspace_info["preview"]
+                                display_cols = [
+                                    c for c in preview_df.columns
+                                    if not str(c).startswith("__")
+                                ]
+                                render_data_table(
+                                    preview_df[display_cols],
+                                    max_rows=50,
+                                    total_rows=work_rows,
+                                )
+                            else:
+                                render_alert(
+                                    "info",
+                                    "No workspace data",
+                                    "The cleaning workspace currently has no rows.",
+                                )
 
                             # Operation 7: Profiler Card
                             with st.container(border=True):
-                                prof_col1, prof_col2 = st.columns([3, 1.3])
+                                prof_col1, prof_col2 = st.columns([2.5, 1.5], vertical_alignment="center")
                                 with prof_col1:
-                                    prof_status_badge = (
-                                        '<div style="margin-top: 0.45rem;"><span class="badge-pill badge-success"> Profile Generated</span></div>'
+                                    badge_markup = (
+                                        render_badge("valid", "Profile generated", as_string=True)
                                         if st.session_state.get("profile_result")
                                         else ""
                                     )
-                                    st.markdown(
-                                        f"""
-                                        <div style="font-weight: 700; font-size: 1rem; color: var(--dq-slate);">
-                                             Data Quality Profiler
+                                    badge_html = f'<div class="dc-profiler-badge-wrapper">{badge_markup}</div>' if badge_markup else ""
+                                    render_html(f"""
+                                        <div class="dc-profiler-header-row">
+                                             <div class="dc-profiler-title">Data quality profiler</div>
+                                             {badge_html}
                                         </div>
-                                        <div style="font-size: 0.85rem; color: var(--dq-slate-muted); margin-top: 0.25rem;">
-                                            Run in-depth algorithmic quality checks for NULL distributions, duplicate row vectors, formatting anomalies, and statistical ranges inside the sandbox.
+                                        <div class="dc-profiler-desc">
+                                             Run in-depth algorithmic quality checks for NULL distributions, duplicate row vectors, formatting anomalies, and statistical ranges inside the sandbox.
                                         </div>
-                                        {prof_status_badge}
-                                        """,
-                                        unsafe_allow_html=True,
-                                    )
+                                    """)
                                 with prof_col2:
                                     if st.button(
-                                        "View Workspace Profile",
+                                        "View workspace profile",
                                         type="secondary",
-                                        use_container_width=True,
+                                        use_container_width=False,
                                         key="hub_open_profiler_btn",
                                     ):
                                         st.session_state.active_profile_target = (
@@ -4682,93 +4942,75 @@ else:
                                         st.rerun()
 
                             # Danger Zone: Delete Workspace
-                            st.markdown(
-                                '<div class="dq-section-title" style="margin-top: 2rem; color: var(--dq-danger);"> Workspace Danger Zone</div>',
-                                unsafe_allow_html=True,
-                            )
-                            with st.container(border=True):
-                                dz_col1, dz_col2 = st.columns([3, 1.2])
-                                with dz_col1:
-                                    st.markdown(
-                                        """
-                                        <div style="font-weight: 700; font-size: 0.95rem; color: var(--dq-danger);">
-                                            Permanently Teardown Cleaning Workspace
-                                        </div>
-                                        <div style="font-size: 0.85rem; color: var(--dq-slate-muted);">
-                                            Drops the temporary working copy table from the database. The original source table is completely unaffected.
-                                        </div>
-                                        """,
-                                        unsafe_allow_html=True,
-                                    )
-                                with dz_col2:
-                                    _ws_confirm_key = "ws_teardown_confirm"
-                                    if not st.session_state.get(_ws_confirm_key, False):
-                                        if st.button(
-                                            "Teardown Workspace",
-                                            type="primary",
-                                            use_container_width=True,
-                                            key="hub_teardown_ws_btn",
-                                        ):
-                                            st.session_state[_ws_confirm_key] = True
+                            render_section_header("Danger zone")
+
+                            @st.dialog("Delete Cleaning Workspace")
+                            def _confirm_delete_workspace_dialog(d_name: str, w_tbl: str):
+                                st.markdown(
+                                    f"Are you sure you want to delete the cleaning workspace table **`{w_tbl}`**?"
+                                )
+                                st.markdown(
+                                    "This drops the temporary working copy. Your source table is not affected."
+                                )
+                                d_c1, d_c2 = st.columns(2)
+                                with d_c1:
+                                    if st.button(
+                                        "Delete workspace",
+                                        type="primary",
+                                        use_container_width=True,
+                                        key="hub_teardown_confirm_btn",
+                                    ):
+                                        with st.spinner("Dropping workspace table..."):
+                                            del_ok, del_msg = delete_workspace(
+                                                engine, d_name, w_tbl
+                                            )
+                                        if del_ok:
+                                            reset_workspace_state()
+                                            st.success(del_msg)
                                             st.rerun()
-                                    else:
-                                        st.markdown(
-                                            '<div style="font-size:0.8rem;color:var(--dq-danger);font-weight:700;margin-bottom:0.4rem;"> This cannot be undone!</div>',
-                                            unsafe_allow_html=True,
-                                        )
-                                        dz_c1, dz_c2 = st.columns(2)
-                                        with dz_c1:
-                                            if st.button(
-                                                "Confirm",
-                                                type="primary",
-                                                use_container_width=True,
-                                                key="hub_teardown_confirm_btn",
-                                            ):
-                                                st.session_state[_ws_confirm_key] = (
-                                                    False
-                                                )
-                                                with st.spinner(
-                                                    "Dropping workspace table..."
-                                                ):
-                                                    del_ok, del_msg = delete_workspace(
-                                                        engine, db_name, working_tbl
-                                                    )
-                                                if del_ok:
-                                                    reset_workspace_state()
-                                                    st.success(del_msg)
-                                                    st.rerun()
-                                                else:
-                                                    st.error(del_msg)
-                                        with dz_c2:
-                                            if st.button(
-                                                "Cancel",
-                                                use_container_width=True,
-                                                key="hub_teardown_cancel_btn",
-                                            ):
-                                                st.session_state[_ws_confirm_key] = (
-                                                    False
-                                                )
-                                                st.rerun()
+                                        else:
+                                            st.error(del_msg)
+                                with d_c2:
+                                    if st.button(
+                                        "Cancel",
+                                        use_container_width=True,
+                                        key="hub_teardown_cancel_btn",
+                                    ):
+                                        st.rerun()
+
+                            with st.container(border=True):
+                                dz_col1, dz_col2 = st.columns([2.5, 1.5], vertical_alignment="center")
+                                with dz_col1:
+                                    render_html(f"""
+                                        <div class="dc-danger-card-title">Delete cleaning workspace</div>
+                                        <div class="dc-danger-card-desc">
+                                            Drops the temporary copy <span class="dc-chip-slate">{html.escape(working_tbl)}</span>. Your source table is not affected.
+                                        </div>
+                                    """)
+                                with dz_col2:
+                                    if st.button(
+                                        "Delete workspace",
+                                        use_container_width=False,
+                                        key="hub_teardown_ws_btn",
+                                    ):
+                                        _confirm_delete_workspace_dialog(db_name, working_tbl)
 
                         # =========================================
                         # SUB-VIEW 2: Whitespace Cleaning
                         # =========================================
                         elif active_sub == "✂️ Whitespace Cleaning":
-                            col_ws_nav, _ = st.columns([1.5, 4])
-                            with col_ws_nav:
-                                if st.button(
-                                    "← Back to Cleaning Hub", key="ws_back_to_hub_btn"
-                                ):
-                                    nav_to_view(
-                                        "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
-                                    )
-                                    st.rerun()
-
-                            st.markdown(
-                                '<div class="dq-section-title" style="margin-top: 0.5rem;"> Whitespace Normalization &amp; Trimming</div>'
-                                '<div class="dq-section-caption">Execute automated whitespace trimming and regex collapsing across string and text columns in the sandbox copy.</div>',
-                                unsafe_allow_html=True,
-                            )
+                            if render_module_header(
+                                title="Whitespace Normalization & Trimming",
+                                subtitle="Execute automated whitespace trimming and regex collapsing across string and text columns in the sandbox copy.",
+                                badge_text="Safe Sandbox",
+                                badge_type="brand",
+                                back_label="Back to Cleaning Hub",
+                                back_key="ws_back_to_hub_btn",
+                            ):
+                                nav_to_view(
+                                    "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
+                                )
+                                st.rerun()
 
                             ws_text_cols = get_text_columns(
                                 engine, db_name, working_tbl
@@ -4929,21 +5171,18 @@ else:
                         # SUB-VIEW 3: Missing Value Cleaning
                         # =========================================
                         elif active_sub == "📝 Blank & NULL Values":
-                            col_b_nav, _ = st.columns([1.5, 4])
-                            with col_b_nav:
-                                if st.button(
-                                    "← Back to Cleaning Hub", key="ws_back_to_hub_btn"
-                                ):
-                                    nav_to_view(
-                                        "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
-                                    )
-                                    st.rerun()
-
-                            st.markdown(
-                                '<div class="dq-section-title" style="margin-top: 0.5rem;"> Missing Value Cleaning</div>'
-                                '<div class="dq-section-caption">Scan for NULL / missing values, select columns, then replace them in one operation.</div>',
-                                unsafe_allow_html=True,
-                            )
+                            if render_module_header(
+                                title="Missing Value Cleaning",
+                                subtitle="Scan for NULL / missing values, select columns, then replace them in one operation.",
+                                badge_text="Safe Sandbox",
+                                badge_type="brand",
+                                back_label="Back to Cleaning Hub",
+                                back_key="ws_back_to_hub_btn",
+                            ):
+                                nav_to_view(
+                                    "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
+                                )
+                                st.rerun()
 
                             # Session state init
                             if "mv_scan_results" not in st.session_state:
@@ -5444,22 +5683,18 @@ else:
                         # SUB-VIEW 4: 🔤 Text Casing Normalization
                         # =========================================
                         elif active_sub == "🔤 Text Casing":
-                            col_tc_nav, _ = st.columns([1.5, 4])
-                            with col_tc_nav:
-                                if st.button(
-                                    "← Back to Cleaning Hub",
-                                    key="casing_back_to_hub_btn",
-                                ):
-                                    nav_to_view(
-                                        "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
-                                    )
-                                    st.rerun()
-
-                            st.markdown(
-                                '<div class="dq-section-title" style="margin-top: 0.5rem;"> Text Casing Normalization</div>'
-                                '<div class="dq-section-caption">Standardize text capitalization to lowercase, UPPERCASE, or Title Case across text columns in the sandbox. The original source table is never modified.</div>',
-                                unsafe_allow_html=True,
-                            )
+                            if render_module_header(
+                                title="Text Casing Normalization",
+                                subtitle="Standardize text capitalization to lowercase, UPPERCASE, or Title Case across text columns in the sandbox. The original source table is never modified.",
+                                badge_text="Safe Sandbox",
+                                badge_type="brand",
+                                back_label="Back to Cleaning Hub",
+                                back_key="casing_back_to_hub_btn",
+                            ):
+                                nav_to_view(
+                                    "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
+                                )
+                                st.rerun()
 
                             text_cols = get_text_columns(engine, db_name, working_tbl)
 
@@ -5708,8 +5943,8 @@ else:
 
                                     st.markdown(
                                         """
-                                        <div style="font-size: 0.82rem; color: var(--dq-slate-muted); margin-top: 0.85rem; border-top: 1px solid var(--dq-border); padding-top: 0.65rem;">
-                                             <b>Production Table Safety Guarantee:</b> Changes were applied only to the cleaning workspace. The original source table was not modified.
+                                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px;">
+                                            Production table remains read-only. Changes applied strictly to the cleaning workspace.
                                         </div>
                                         """,
                                         unsafe_allow_html=True,
@@ -5731,23 +5966,19 @@ else:
                         # SUB-VIEW 5: Duplicate Handling
                         # =========================================
                         elif active_sub == "🔁 Duplicate Handling":
-                            col_dup_nav, _ = st.columns([1.5, 4])
-                            with col_dup_nav:
-                                if st.button(
-                                    "← Back to Cleaning Hub",
-                                    key="dup_back_to_hub_btn",
-                                ):
-                                    nav_to_view(
-                                        "🧹 Cleaning Workspace",
-                                        "🏠 Cleaning Hub",
-                                    )
-                                    st.rerun()
-
-                            st.markdown(
-                                '<div class="dq-section-title" style="margin-top: 0.5rem;"> Duplicate Handling</div>'
-                                '<div class="dq-section-caption">Detect and remove duplicate records based on one or more duplicate key columns. The original source table is never modified.</div>',
-                                unsafe_allow_html=True,
-                            )
+                            if render_module_header(
+                                title="Duplicate Handling",
+                                subtitle="Detect and remove duplicate records based on one or more duplicate key columns. The original source table is never modified.",
+                                badge_text="Safe Sandbox",
+                                badge_type="brand",
+                                back_label="Back to Cleaning Hub",
+                                back_key="dup_back_to_hub_btn",
+                            ):
+                                nav_to_view(
+                                    "🧹 Cleaning Workspace",
+                                    "🏠 Cleaning Hub",
+                                )
+                                st.rerun()
 
                             inspector = inspect(engine)
                             table_cols_info = inspector.get_columns(
@@ -6534,8 +6765,8 @@ else:
 
                                     st.markdown(
                                         """
-                                        <div style="font-size: 0.82rem; color: var(--dq-slate-muted); margin-top: 0.85rem; border-top: 1px solid var(--dq-border); padding-top: 0.65rem;">
-                                             <b>Production Table Safety Guarantee:</b> Changes were applied only to the cleaning workspace. The original source table was not modified.
+                                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px;">
+                                            Production table remains read-only. Changes applied strictly to the cleaning workspace.
                                         </div>
                                         """,
                                         unsafe_allow_html=True,
@@ -6544,36 +6775,605 @@ else:
                                     col_d_next, _ = st.columns([2, 3])
                                     with col_d_next:
                                         if st.button(
-                                            "View Workspace Data Profile",
+                                            "Proceed to Special Character Cleaning",
                                             type="secondary",
-                                            key="dup_proceed_to_prof_btn",
+                                            use_container_width=True,
+                                            key="dup_proceed_to_special_chars_btn",
                                         ):
-                                            st.session_state.active_profile_target = (
-                                                "workspace"
+                                            st.session_state.workspace_sub_tab = (
+                                                "🔣 Special Character Cleaning"
                                             )
-                                            st.session_state.show_profile_dialog = True
                                             st.rerun()
 
                         # =========================================
-                        # SUB-VIEW 6: Date Formatting
+                        # SUB-VIEW 6: 🔣 Special Character Cleaning
+                        # =========================================
+                        elif active_sub == "🔣 Special Character Cleaning":
+                            if render_module_header(
+                                title="Special Character Cleaning",
+                                subtitle="Identify and clean unwanted control characters, non-printable characters, and special symbols from text columns. Your original source table is never modified.",
+                                badge_text="Safe Sandbox",
+                                badge_type="brand",
+                                back_label="Back to Cleaning Hub",
+                                back_key="sc_back_to_hub_btn",
+                            ):
+                                nav_to_view(
+                                    "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
+                                )
+                                st.rerun()
+
+                            text_cols_info = get_text_columns_with_types(engine, db_name, working_tbl)
+                            text_col_names = [c["name"] for c in text_cols_info]
+                            col_type_lookup = {c["name"]: c.get("column_type", c.get("data_type", "TEXT").upper()) for c in text_cols_info}
+
+                            if not text_cols_info:
+                                st.markdown(
+                                    """
+                                    <div class="empty-state-card">
+                                        <div class="es-title">No Text Columns Found</div>
+                                        <div class="es-desc">This table has no string or text columns eligible for special character cleaning.</div>
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True,
+                                )
+                            else:
+                                # Track active working table to reset state when table changes
+                                if st.session_state.get("sc_active_table") != working_tbl:
+                                    st.session_state.sc_active_table = working_tbl
+                                    st.session_state.sc_selected_columns = list(text_col_names)
+                                    st.session_state.sc_scan_results = None
+                                    st.session_state.sc_scan_executed = False
+                                    st.session_state.sc_cleaning_report = None
+                                    for c_info in text_cols_info:
+                                        st.session_state[f"sc_target_col_{c_info['name']}"] = True
+
+                                # Session state initialization
+                                if "sc_selected_columns" not in st.session_state:
+                                    st.session_state.sc_selected_columns = list(text_col_names)
+                                for c_info in text_cols_info:
+                                    k = f"sc_target_col_{c_info['name']}"
+                                    if k not in st.session_state:
+                                        st.session_state[k] = c_info["name"] in st.session_state.sc_selected_columns
+
+                                if "sc_control_chars" not in st.session_state:
+                                    st.session_state.sc_control_chars = []
+                                if "sc_non_printable" not in st.session_state:
+                                    st.session_state.sc_non_printable = []
+                                if "sc_special_chars" not in st.session_state:
+                                    st.session_state.sc_special_chars = []
+                                if "sc_custom_chars" not in st.session_state:
+                                    st.session_state.sc_custom_chars = ""
+                                if "sc_mode" not in st.session_state:
+                                    st.session_state.sc_mode = "remove"
+                                if "sc_replacement" not in st.session_state:
+                                    st.session_state.sc_replacement = ""
+                                if "sc_scan_results" not in st.session_state:
+                                    st.session_state.sc_scan_results = None
+                                if "sc_scan_executed" not in st.session_state:
+                                    st.session_state.sc_scan_executed = False
+
+                                # Main Configuration Card
+                                with st.container(border=True):
+                                    st.markdown("#### 1. Target Text Columns")
+                                    st.caption("Select one or more eligible text columns to inspect and clean.")
+
+                                    col_btn1, col_btn2, _ = st.columns([1, 1, 4])
+                                    with col_btn1:
+                                        if st.button("Select All", key="sc_col_select_all_btn", use_container_width=True):
+                                            st.session_state.sc_selected_columns = list(text_col_names)
+                                            for c_info in text_cols_info:
+                                                st.session_state[f"sc_target_col_{c_info['name']}"] = True
+                                            st.session_state.sc_scan_executed = False
+                                            st.session_state.sc_scan_results = None
+                                            st.rerun()
+                                    with col_btn2:
+                                        if st.button("Deselect All", key="sc_col_deselect_all_btn", use_container_width=True):
+                                            st.session_state.sc_selected_columns = []
+                                            for c_info in text_cols_info:
+                                                st.session_state[f"sc_target_col_{c_info['name']}"] = False
+                                            st.session_state.sc_scan_executed = False
+                                            st.session_state.sc_scan_results = None
+                                            st.rerun()
+
+                                    # Column checkboxes showing MySQL data type
+                                    col_grid = st.columns(min(3, max(1, len(text_cols_info))))
+                                    for idx, col_info in enumerate(text_cols_info):
+                                        c_name = col_info["name"]
+                                        c_type = col_info["column_type"]
+                                        chk_key = f"sc_target_col_{c_name}"
+                                        with col_grid[idx % len(col_grid)]:
+                                            st.checkbox(
+                                                f"**{c_name}** `({c_type})`",
+                                                key=chk_key,
+                                            )
+
+                                    # Synchronize sc_selected_columns with checkbox states
+                                    current_selected = [
+                                        c["name"]
+                                        for c in text_cols_info
+                                        if st.session_state.get(f"sc_target_col_{c['name']}", False)
+                                    ]
+                                    if set(current_selected) != set(st.session_state.sc_selected_columns):
+                                        st.session_state.sc_selected_columns = current_selected
+                                        st.session_state.sc_scan_executed = False
+                                        st.session_state.sc_scan_results = None
+
+                                    st.markdown("---")
+                                    st.markdown("#### 2. Cleaning Operation & Mode")
+                                    
+                                    mode_col1, mode_col2 = st.columns([1.5, 2])
+                                    with mode_col1:
+                                        mode_choice = st.radio(
+                                            "Operation Mode",
+                                            options=["Remove selected characters", "Replace selected characters"],
+                                            index=0 if st.session_state.sc_mode == "remove" else 1,
+                                            key="sc_mode_radio_choice",
+                                            horizontal=True,
+                                        )
+                                        new_m = "remove" if mode_choice == "Remove selected characters" else "replace"
+                                        if new_m != st.session_state.sc_mode:
+                                            st.session_state.sc_mode = new_m
+                                            st.session_state.sc_scan_executed = False
+                                            st.session_state.sc_scan_results = None
+                                            st.rerun()
+
+                                    with mode_col2:
+                                        if st.session_state.sc_mode == "replace":
+                                            repl_val = st.text_input(
+                                                "Replacement string",
+                                                value=st.session_state.sc_replacement,
+                                                key="sc_replacement_string_input",
+                                                help="Each matched character will be replaced with this string (e.g. '_' or a space).",
+                                                placeholder="e.g. _ or space",
+                                            )
+                                            if repl_val != st.session_state.sc_replacement:
+                                                st.session_state.sc_replacement = repl_val
+                                                st.session_state.sc_scan_executed = False
+                                                st.session_state.sc_scan_results = None
+                                                st.rerun()
+
+                                    st.markdown("---")
+                                    st.markdown("#### 3. Character Selection")
+                                    st.caption("Select specific characters or categories to target. Nothing is removed by default.")
+
+                                    # Tabbed interface for character categories
+                                    char_tab1, char_tab2, char_tab3, char_tab4 = st.tabs([
+                                        "Control Characters",
+                                        "Non-Printable Characters",
+                                        "Common Special Characters",
+                                        "Custom Characters",
+                                    ])
+
+                                    with char_tab1:
+                                        render_html("""
+                                            <div style="font-size: 0.82rem; color: var(--dq-slate-muted); margin-bottom: 0.6rem;">
+                                                <b>Whitespace Interaction:</b> Control characters like tabs (<code>\\t</code>) and newlines (<code>\\n</code>) are targeted individually without collapsing standard single spaces. For general space trimming, use the <b>Whitespace Cleaning</b> module.
+                                            </div>
+                                        """)
+                                        ctrl_btn1, ctrl_btn2, _ = st.columns([1, 1, 4])
+                                        with ctrl_btn1:
+                                            if st.button("Select All", key="sc_ctrl_select_all_btn", use_container_width=True):
+                                                st.session_state.sc_control_chars = list(CONTROL_CHARS.keys())
+                                                for key in CONTROL_CHARS.keys():
+                                                    st.session_state[f"sc_ctrl_chk_{key}"] = True
+                                                st.session_state.sc_scan_executed = False
+                                                st.session_state.sc_scan_results = None
+                                                st.rerun()
+                                        with ctrl_btn2:
+                                            if st.button("Deselect All", key="sc_ctrl_deselect_all_btn", use_container_width=True):
+                                                st.session_state.sc_control_chars = []
+                                                for key in CONTROL_CHARS.keys():
+                                                    st.session_state[f"sc_ctrl_chk_{key}"] = False
+                                                st.session_state.sc_scan_executed = False
+                                                st.session_state.sc_scan_results = None
+                                                st.rerun()
+
+                                        for key in CONTROL_CHARS.keys():
+                                            k = f"sc_ctrl_chk_{key}"
+                                            if k not in st.session_state:
+                                                st.session_state[k] = key in st.session_state.sc_control_chars
+
+                                        ctrl_cols = st.columns(3)
+                                        for c_idx, (key, info) in enumerate(CONTROL_CHARS.items()):
+                                            with ctrl_cols[c_idx % 3]:
+                                                st.checkbox(
+                                                    info["display"],
+                                                    key=f"sc_ctrl_chk_{key}",
+                                                )
+
+                                        current_ctrl = [key for key in CONTROL_CHARS.keys() if st.session_state.get(f"sc_ctrl_chk_{key}", False)]
+                                        if set(current_ctrl) != set(st.session_state.sc_control_chars):
+                                            st.session_state.sc_control_chars = current_ctrl
+                                            st.session_state.sc_scan_executed = False
+                                            st.session_state.sc_scan_results = None
+
+                                    with char_tab2:
+                                        render_html("""
+                                            <div style="font-size: 0.82rem; color: var(--dq-slate-muted); margin-bottom: 0.6rem;">
+                                                <b>Unicode Preservation:</b> Valid multilingual text (e.g. accented letters, Kanji, Cyrillic, emojis) is strictly preserved. Only explicit invisible control/format codes are cleaned.
+                                            </div>
+                                        """)
+                                        np_btn1, np_btn2, _ = st.columns([1, 1, 4])
+                                        with np_btn1:
+                                            if st.button("Select All", key="sc_np_select_all_btn", use_container_width=True):
+                                                st.session_state.sc_non_printable = list(NON_PRINTABLE_CHARS.keys())
+                                                for key in NON_PRINTABLE_CHARS.keys():
+                                                    st.session_state[f"sc_np_chk_{key}"] = True
+                                                st.session_state.sc_scan_executed = False
+                                                st.session_state.sc_scan_results = None
+                                                st.rerun()
+                                        with np_btn2:
+                                            if st.button("Deselect All", key="sc_np_deselect_all_btn", use_container_width=True):
+                                                st.session_state.sc_non_printable = []
+                                                for key in NON_PRINTABLE_CHARS.keys():
+                                                    st.session_state[f"sc_np_chk_{key}"] = False
+                                                st.session_state.sc_scan_executed = False
+                                                st.session_state.sc_scan_results = None
+                                                st.rerun()
+
+                                        for key in NON_PRINTABLE_CHARS.keys():
+                                            k = f"sc_np_chk_{key}"
+                                            if k not in st.session_state:
+                                                st.session_state[k] = key in st.session_state.sc_non_printable
+
+                                        np_cols = st.columns(3)
+                                        for np_idx, (key, info) in enumerate(NON_PRINTABLE_CHARS.items()):
+                                            with np_cols[np_idx % 3]:
+                                                st.checkbox(
+                                                    info["display"],
+                                                    key=f"sc_np_chk_{key}",
+                                                )
+
+                                        current_np = [key for key in NON_PRINTABLE_CHARS.keys() if st.session_state.get(f"sc_np_chk_{key}", False)]
+                                        if set(current_np) != set(st.session_state.sc_non_printable):
+                                            st.session_state.sc_non_printable = current_np
+                                            st.session_state.sc_scan_executed = False
+                                            st.session_state.sc_scan_results = None
+
+                                    with char_tab3:
+                                        st.caption("Punctuation and symbols are preserved unless explicitly selected below.")
+                                        spec_btn1, spec_btn2, _ = st.columns([1, 1, 4])
+                                        with spec_btn1:
+                                            if st.button("Select All", key="sc_spec_select_all_btn", use_container_width=True):
+                                                st.session_state.sc_special_chars = [ch for ch, _ in COMMON_SPECIAL_CHARS]
+                                                for s_idx in range(len(COMMON_SPECIAL_CHARS)):
+                                                    st.session_state[f"sc_spec_chk_{s_idx}"] = True
+                                                st.session_state.sc_scan_executed = False
+                                                st.session_state.sc_scan_results = None
+                                                st.rerun()
+                                        with spec_btn2:
+                                            if st.button("Deselect All", key="sc_spec_deselect_all_btn", use_container_width=True):
+                                                st.session_state.sc_special_chars = []
+                                                for s_idx in range(len(COMMON_SPECIAL_CHARS)):
+                                                    st.session_state[f"sc_spec_chk_{s_idx}"] = False
+                                                st.session_state.sc_scan_executed = False
+                                                st.session_state.sc_scan_results = None
+                                                st.rerun()
+
+                                        for s_idx, (ch, _) in enumerate(COMMON_SPECIAL_CHARS):
+                                            k = f"sc_spec_chk_{s_idx}"
+                                            if k not in st.session_state:
+                                                st.session_state[k] = ch in st.session_state.sc_special_chars
+
+                                        spec_cols = st.columns(4)
+                                        for s_idx, (ch, desc) in enumerate(COMMON_SPECIAL_CHARS):
+                                            with spec_cols[s_idx % 4]:
+                                                st.checkbox(
+                                                    desc,
+                                                    key=f"sc_spec_chk_{s_idx}",
+                                                )
+
+                                        current_spec = [ch for s_idx, (ch, _) in enumerate(COMMON_SPECIAL_CHARS) if st.session_state.get(f"sc_spec_chk_{s_idx}", False)]
+                                        if set(current_spec) != set(st.session_state.sc_special_chars):
+                                            st.session_state.sc_special_chars = current_spec
+                                            st.session_state.sc_scan_executed = False
+                                            st.session_state.sc_scan_results = None
+
+                                    with char_tab4:
+                                        render_html("""
+                                            <div style="font-size: 0.82rem; color: var(--dq-slate-muted); margin-bottom: 0.6rem;">
+                                                <b>Literal Matching:</b> Every character entered here is matched literally. Regex metacharacters (<code>.</code>, <code>*</code>, <code>+</code>, <code>?</code>, <code>[</code>, <code>]</code>, <code>(</code>, <code>)</code>, <code>\\</code>, <code>^</code>, <code>-</code>) are automatically escaped to prevent unintended regex patterns.
+                                            </div>
+                                        """)
+                                        cust_in = st.text_input(
+                                            "Custom characters to clean",
+                                            value=st.session_state.sc_custom_chars,
+                                            key="sc_custom_input_field",
+                                            placeholder="e.g. @#$%^&*~|",
+                                            help="Enter any literal characters to clean. Each character is evaluated individually.",
+                                        )
+                                        if cust_in != st.session_state.sc_custom_chars:
+                                            st.session_state.sc_custom_chars = cust_in
+                                            st.session_state.sc_scan_executed = False
+                                            st.session_state.sc_scan_results = None
+                                            st.rerun()
+
+                                    st.markdown("---")
+                                    # Summary of active rules
+                                    total_rules_selected = (
+                                        len(st.session_state.sc_control_chars)
+                                        + len(st.session_state.sc_non_printable)
+                                        + len(st.session_state.sc_special_chars)
+                                        + len(st.session_state.sc_custom_chars)
+                                    )
+                                    selected_cols_count = len(st.session_state.sc_selected_columns)
+
+                                    action_col1, action_col2, _ = st.columns([1.5, 1.2, 3])
+                                    with action_col1:
+                                        scan_btn = st.button(
+                                            "Scan & Preview Changes",
+                                            type="secondary",
+                                            use_container_width=True,
+                                            key="sc_run_scan_action_btn",
+                                        )
+                                    with action_col2:
+                                        if st.button("↺ Reset Configuration", key="sc_reset_config_btn", use_container_width=True):
+                                            st.session_state.sc_selected_columns = list(text_col_names)
+                                            for c_info in text_cols_info:
+                                                st.session_state[f"sc_target_col_{c_info['name']}"] = True
+                                            for k in list(st.session_state.keys()):
+                                                if k.startswith("sc_ctrl_chk_") or k.startswith("sc_np_chk_") or k.startswith("sc_spec_chk_"):
+                                                    st.session_state[k] = False
+                                            st.session_state.sc_control_chars = []
+                                            st.session_state.sc_non_printable = []
+                                            st.session_state.sc_special_chars = []
+                                            st.session_state.sc_custom_chars = ""
+                                            st.session_state.sc_mode = "remove"
+                                            st.session_state.sc_replacement = ""
+                                            st.session_state.sc_scan_results = None
+                                            st.session_state.sc_scan_executed = False
+                                            st.rerun()
+
+                                    if scan_btn:
+                                        if selected_cols_count == 0:
+                                            st.warning("Please select at least one column to scan.")
+                                        elif total_rules_selected == 0:
+                                            st.warning("Please select at least one control character, special character, or custom character to clean.")
+                                        else:
+                                            with st.spinner("Scanning workspace columns for special characters..."):
+                                                st.session_state.sc_scan_results = scan_special_characters_workspace(
+                                                    engine,
+                                                    db_name,
+                                                    working_tbl,
+                                                    selected_columns=st.session_state.sc_selected_columns,
+                                                    control_chars_selected=st.session_state.sc_control_chars,
+                                                    special_chars_selected=st.session_state.sc_special_chars,
+                                                    custom_chars=st.session_state.sc_custom_chars,
+                                                    mode=st.session_state.sc_mode,
+                                                    replacement=st.session_state.sc_replacement,
+                                                    non_printable_selected=st.session_state.sc_non_printable,
+                                                )
+                                                st.session_state.sc_scan_executed = True
+                                            st.rerun()
+
+                                # ========================================================
+                                # Interactive Preview Section (Safe - Never modifies DB)
+                                # ========================================================
+                                if st.session_state.sc_scan_executed:
+                                    scan_results = st.session_state.sc_scan_results or []
+                                    st.markdown("### 4. Inspection & Proposed Changes Preview")
+
+                                    if not scan_results:
+                                        render_alert(
+                                            alert_type="success",
+                                            title="No Targeted Characters Detected",
+                                            message="None of the selected text columns contain the specified special characters or control codes.",
+                                        )
+                                    else:
+                                        total_aff_rows = sum(r["total_affected_rows"] for r in scan_results)
+                                        total_aff_vals = sum(r["total_affected_values"] for r in scan_results)
+
+                                        render_alert(
+                                            alert_type="info",
+                                            title=f"{len(scan_results)} Column(s) Affected — {total_aff_rows:,} Row(s) Identified",
+                                            message=f"Found {total_aff_vals:,} matching value occurrences. Review original vs proposed cleaned values below before confirming execution.",
+                                        )
+
+                                        # Column preview expanders
+                                        for res in scan_results:
+                                            col_n = res["column"]
+                                            col_t = res.get("data_type", col_type_lookup.get(col_n, "VARCHAR"))
+                                            aff_r = res["total_affected_rows"]
+                                            sample_rows = res.get("sample_rows", [])
+
+                                            with st.expander(
+                                                f"Column `{col_n}` ({col_t}) — {aff_r:,} row(s) to change",
+                                                expanded=True,
+                                            ):
+                                                chars_desc = ", ".join(res.get("chars_targeted", []))
+                                                st.caption(f"Targeted characters in rule: {chars_desc}")
+
+                                                if sample_rows:
+                                                    prev_df = pd.DataFrame([
+                                                        {
+                                                            "Original Value": r["original"],
+                                                            "Proposed Cleaned Value": r["cleaned"],
+                                                            "Occurrences": r["count"],
+                                                        }
+                                                        for r in sample_rows[:30]
+                                                    ])
+                                                    st.dataframe(
+                                                        prev_df,
+                                                        use_container_width=True,
+                                                        hide_index=True,
+                                                    )
+                                                else:
+                                                    st.caption("No sample rows available.")
+
+                                        # Apply Button
+                                        st.markdown("---")
+                                        act_label = "Remove" if st.session_state.sc_mode == "remove" else f"Replace with '{st.session_state.sc_replacement}'"
+                                        apply_btn = st.button(
+                                            f"Apply Special Character Cleaning ({act_label}) to {len(scan_results)} Column(s)",
+                                            type="primary",
+                                            use_container_width=True,
+                                            key="sc_apply_transformation_btn",
+                                        )
+
+                                        if apply_btn:
+                                            with st.spinner("Applying special character cleaning to workspace table..."):
+                                                success, msg, report = clean_special_characters_workspace(
+                                                    engine,
+                                                    db_name,
+                                                    working_tbl,
+                                                    selected_columns=[r["column"] for r in scan_results],
+                                                    control_chars_selected=st.session_state.sc_control_chars,
+                                                    special_chars_selected=st.session_state.sc_special_chars,
+                                                    custom_chars=st.session_state.sc_custom_chars,
+                                                    mode=st.session_state.sc_mode,
+                                                    replacement=st.session_state.sc_replacement,
+                                                    non_printable_selected=st.session_state.sc_non_printable,
+                                                )
+                                            if success:
+                                                st.session_state.sc_cleaning_report = report
+                                                st.session_state.profile_result = None
+                                                st.session_state.sc_scan_executed = False
+                                                st.session_state.sc_scan_results = None
+
+                                                # Audit logging to session history
+                                                if "cleaning_history" not in st.session_state:
+                                                    st.session_state.cleaning_history = []
+                                                st.session_state.cleaning_history.append({
+                                                    "tool": "Special Character Cleaning",
+                                                    "mode": st.session_state.sc_mode,
+                                                    "columns": [r["column"] for r in scan_results],
+                                                    "rows_affected": report.get("rows_affected", 0),
+                                                    "values_changed": report.get("total_values_changed", 0),
+                                                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                    "details": report,
+                                                })
+
+                                                st.success(msg)
+                                                st.rerun()
+                                            else:
+                                                st.error(msg)
+
+                                # ========================================================
+                                # Executive Cleaning Report (Post-Execution Audit)
+                                # ========================================================
+                                if st.session_state.get("sc_cleaning_report"):
+                                    report = st.session_state.sc_cleaning_report
+                                    total_changed = report.get("total_values_changed", 0)
+                                    cols_affected = len(report.get("columns_affected", []))
+                                    rows_affected = report.get("rows_affected", 0)
+                                    op_name = report.get("operation", "Special Character Cleaning")
+                                    mode_used = report.get("mode", "remove")
+
+                                    st.markdown(
+                                        f'<div class="dq-section-title" style="margin-top: 1.5rem;"> Executive {op_name} Report</div>',
+                                        unsafe_allow_html=True,
+                                    )
+
+                                    with st.container(border=True):
+                                        if total_changed == 0:
+                                            st.info(
+                                                "Special character cleaning finished. All targeted columns are normalized."
+                                            )
+                                        else:
+                                            st.success(
+                                                f"{op_name} successfully committed exclusively to workspace sandbox `{working_tbl}`. "
+                                                f"Production source table `{db_name}.{tbl_name}` remains strictly unmodified."
+                                            )
+                                            c_kpi1, c_kpi2, c_kpi3, c_kpi4 = st.columns(4)
+                                            with c_kpi1:
+                                                st.markdown(
+                                                    f"""
+                                                    <div class="kpi-card kpi-card-success">
+                                                        <div class="kpi-label">Values Cleaned</div>
+                                                        <div class="kpi-value">{total_changed:,}</div>
+                                                        <div class="kpi-subtext">Strings transformed</div>
+                                                    </div>
+                                                    """,
+                                                    unsafe_allow_html=True,
+                                                )
+                                            with c_kpi2:
+                                                st.markdown(
+                                                    f"""
+                                                    <div class="kpi-card">
+                                                        <div class="kpi-label">Columns Affected</div>
+                                                        <div class="kpi-value">{cols_affected}</div>
+                                                        <div class="kpi-subtext">Transformed attributes</div>
+                                                    </div>
+                                                    """,
+                                                    unsafe_allow_html=True,
+                                                )
+                                            with c_kpi3:
+                                                st.markdown(
+                                                    f"""
+                                                    <div class="kpi-card">
+                                                        <div class="kpi-label">Unique Rows Affected</div>
+                                                        <div class="kpi-value">{rows_affected:,}</div>
+                                                        <div class="kpi-subtext">Updated in sandbox</div>
+                                                    </div>
+                                                    """,
+                                                    unsafe_allow_html=True,
+                                                )
+                                            with c_kpi4:
+                                                st.markdown(
+                                                    f"""
+                                                    <div class="kpi-card">
+                                                        <div class="kpi-label">Operation Mode</div>
+                                                        <div class="kpi-value" style="font-size: 1.25rem;">{mode_used.title()}</div>
+                                                        <div class="kpi-subtext">Sandbox committed</div>
+                                                    </div>
+                                                    """,
+                                                    unsafe_allow_html=True,
+                                                )
+
+                                            st.markdown("##### Column-Level Impact Breakdown")
+                                            column_reports = report.get("columns_affected", [])
+                                            if column_reports:
+                                                rep_df = pd.DataFrame(column_reports).rename(
+                                                    columns={
+                                                        "column": "Column Name",
+                                                        "values_changed": "Values Cleaned",
+                                                        "rows_affected": "Rows Affected",
+                                                    }
+                                                )
+                                                st.dataframe(
+                                                    rep_df,
+                                                    use_container_width=True,
+                                                    hide_index=True,
+                                                    column_config={
+                                                        "Values Cleaned": st.column_config.ProgressColumn(
+                                                            "Values Cleaned",
+                                                            help="Number of values normalized in this column",
+                                                            format="%d",
+                                                            min_value=0,
+                                                            max_value=max(
+                                                                [c["values_changed"] for c in column_reports] or [10]
+                                                            ),
+                                                        )
+                                                    },
+                                                )
+
+                                        col_sc_next, _ = st.columns([2, 3])
+                                        with col_sc_next:
+                                            if st.button(
+                                                "Proceed to Date Formatting",
+                                                type="secondary",
+                                                use_container_width=True,
+                                                key="sc_proceed_to_datefmt_btn",
+                                            ):
+                                                st.session_state.workspace_sub_tab = "📅 Date Formatting"
+                                                st.rerun()
+
+                        # =========================================
+                        # SUB-VIEW 7: Date Formatting
                         # =========================================
                         elif active_sub == "📅 Date Formatting":
-                            col_df_nav, _ = st.columns([1.5, 4])
-                            with col_df_nav:
-                                if st.button(
-                                    "← Back to Cleaning Hub",
-                                    key="datefmt_back_to_hub_btn",
-                                ):
-                                    nav_to_view(
-                                        "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
-                                    )
-                                    st.rerun()
-
-                            st.markdown(
-                                '<div class="dq-section-title" style="margin-top: 0.5rem;"> Date Formatting</div>'
-                                '<div class="dq-section-caption">Validate and preview date formatting for native DATE/DATETIME/TIMESTAMP columns. The original source table is never modified. Native MySQL date storage is binary — display format is applied at query time via DATE_FORMAT().</div>',
-                                unsafe_allow_html=True,
-                            )
+                            if render_module_header(
+                                title="Date Formatting",
+                                subtitle="Validate and preview date formatting for native DATE/DATETIME/TIMESTAMP columns. The original source table is never modified. Native MySQL date storage is binary — display format is applied at query time via DATE_FORMAT().",
+                                badge_text="Safe Sandbox",
+                                badge_type="brand",
+                                back_label="Back to Cleaning Hub",
+                                back_key="datefmt_back_to_hub_btn",
+                            ):
+                                nav_to_view(
+                                    "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
+                                )
+                                st.rerun()
 
                             date_cols = get_date_columns(engine, db_name, working_tbl)
 
@@ -6867,26 +7667,18 @@ else:
                                             st.rerun()
 
                         elif active_sub == "🗓️ Advanced Date Standardization":
-                            col_ads_nav, _ = st.columns([1.5, 4])
-                            with col_ads_nav:
-                                if st.button(
-                                    "← Back to Cleaning Hub",
-                                    key="adv_date_back_to_hub_btn",
-                                ):
-                                    nav_to_view(
-                                        "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
-                                    )
-                                    st.rerun()
-
-                            st.markdown(
-                                '<div class="dq-section-title" style="margin-top: 0.5rem;">🗓️ Advanced Date Standardization</div>'
-                                '<div class="dq-section-caption">'
-                                "Detect and standardize date-related values stored inside <code>VARCHAR</code> or <code>TEXT</code> columns using two strict deterministic rules: "
-                                "<b>Rule 1 (Text Month Detection)</b> and <b>Rule 2 (Numeric Date Detection with 4-digit Year & Day &gt; 12)</b>. "
-                                "Always creates a new output column (e.g. <code>&lt;column&gt;_standardized</code>), sets ambiguous or invalid dates to <code>NULL</code>, and preserves the original column completely."
-                                "</div>",
-                                unsafe_allow_html=True,
-                            )
+                            if render_module_header(
+                                title="Advanced Date Standardization",
+                                subtitle="Detect and standardize date-related values stored inside VARCHAR or TEXT columns using strict deterministic rules (Text Month Detection and Numeric Date Detection with 4-digit Year & Day > 12). Always creates a new output column, sets ambiguous or invalid dates to NULL, and preserves the original column completely.",
+                                badge_text="Safe Sandbox",
+                                badge_type="brand",
+                                back_label="Back to Cleaning Hub",
+                                back_key="adv_date_back_to_hub_btn",
+                            ):
+                                nav_to_view(
+                                    "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
+                                )
+                                st.rerun()
 
                             # Initialize session state for Advanced Date Standardization
                             if "adv_date_scan_results" not in st.session_state:
@@ -7287,23 +8079,18 @@ else:
                                         )
 
                         elif active_sub == "☑️ Boolean Normalization":
-                            # Back button
-                            col_bn_nav, _ = st.columns([1.5, 4])
-                            with col_bn_nav:
-                                if st.button(
-                                    "← Back to Cleaning Hub",
-                                    key="bool_back_to_hub_btn",
-                                ):
-                                    nav_to_view(
-                                        "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
-                                    )
-                                    st.rerun()
-
-                            st.markdown(
-                                '<div class="dq-section-title" style="margin-top: 0.5rem;"> Boolean / Yes-No Normalization</div>'
-                                '<div class="dq-section-caption">Semantic Boolean detection across all columns (both declared Boolean and VARCHAR/Text/Numeric columns). Scans actual column values, distinguishes Physical vs. Logical datatype, computes confidence, previews mappings, and normalizes with full Undo support.</div>',
-                                unsafe_allow_html=True,
-                            )
+                            if render_module_header(
+                                title="Boolean / Yes-No Normalization",
+                                subtitle="Semantic Boolean detection across all columns (both declared Boolean and VARCHAR/Text/Numeric columns). Scans actual column values, distinguishes Physical vs. Logical datatype, computes confidence, previews mappings, and normalizes with full Undo support.",
+                                badge_text="Safe Sandbox",
+                                badge_type="brand",
+                                back_label="Back to Cleaning Hub",
+                                back_key="bool_back_to_hub_btn",
+                            ):
+                                nav_to_view(
+                                    "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
+                                )
+                                st.rerun()
 
                             schema_cols = workspace_info.get("schema", [])
                             total_scannable = len(schema_cols)
@@ -7811,6 +8598,856 @@ else:
                                                         use_container_width=True,
                                                         hide_index=True,
                                                     )
+
+                        # =========================================
+                        # SUB-VIEW 10: Intelligent Numeric Data Cleaning
+                        # =========================================
+                        elif active_sub == "🔢 Numeric Data Cleaning":
+                            if render_module_header(
+                                title="Intelligent Numeric Data Detection & Conversion",
+                                subtitle="Automatically scan MySQL text-based columns (VARCHAR, CHAR, TEXT) for numeric representations, recommend safe types (INT, BIGINT, DECIMAL, DOUBLE), inspect and normalize formatting rules, preview value-level conversions, and safely execute schema type alterations exclusively on the isolated cleaning workspace.",
+                                badge_text="Safe Sandbox",
+                                badge_type="brand",
+                                back_label="Back to Cleaning Hub",
+                                back_key="num_back_to_hub_btn",
+                            ):
+                                nav_to_view(
+                                    "🧹 Cleaning Workspace", "🏠 Cleaning Hub"
+                                )
+                                st.rerun()
+
+                            # Discover eligible columns
+                            eligible_text_col_info = get_eligible_text_columns(
+                                engine, db_name, working_tbl
+                            )
+                            eligible_text_cols = [
+                                c["name"] if isinstance(c, dict) else str(c)
+                                for c in eligible_text_col_info
+                                if (isinstance(c, dict) and c.get("name")) or (isinstance(c, str) and c)
+                            ]
+                            col_type_dict = {
+                                c["name"]: c.get("column_type", c.get("data_type", "TEXT"))
+                                for c in eligible_text_col_info
+                                if isinstance(c, dict) and "name" in c
+                            }
+
+                            if not eligible_text_cols:
+                                st.info(
+                                    f"No VARCHAR, CHAR, or TEXT columns were detected in `{working_tbl}`. "
+                                    "Numeric conversion operates on string-based columns containing numeric text representations."
+                                )
+                            else:
+                                # Top Navigation Tabs: Automatic Detection vs. Manual Selection
+                                num_tab_auto, num_tab_manual = st.tabs(
+                                    [
+                                        "Automatic Table Scan & Candidates",
+                                        "Select Column Manually",
+                                    ]
+                                )
+
+                                with num_tab_auto:
+                                    st.markdown(
+                                        '<div style="font-size: 0.9rem; color: var(--dq-slate); margin-bottom: 0.5rem;">'
+                                        '<b>Automatic Schema & Column Inspection</b>'
+                                        '</div>'
+                                        '<div style="font-size: 0.82rem; color: var(--dq-slate-muted); margin-bottom: 1rem;">'
+                                        'Scans text columns across the workspace using a representative sample (~50%–60% of table rows), evaluates numeric consistency, identifies decimals vs integers, '
+                                        'and protects identifiers (such as postal codes, product codes, or phone numbers) from accidental numeric truncation.'
+                                        '</div>',
+                                        unsafe_allow_html=True,
+                                    )
+
+                                    col_scan_btn, col_scan_opt = st.columns([2, 3])
+                                    with col_scan_opt:
+                                        c_thr1, c_thr2 = st.columns(2)
+                                        with c_thr1:
+                                            scan_thresh = st.slider(
+                                                "Detection Threshold (%):",
+                                                min_value=50,
+                                                max_value=100,
+                                                value=85,
+                                                step=5,
+                                                key="num_scan_thresh_slider",
+                                                help="Minimum proportion of non-empty values that must be valid numbers for a column to qualify as an automatic numeric candidate.",
+                                            )
+                                        with c_thr2:
+                                            scan_sample_pct = st.slider(
+                                                "Sampling Proportion (%):",
+                                                min_value=20,
+                                                max_value=100,
+                                                value=55,
+                                                step=5,
+                                                key="num_scan_sample_pct_slider",
+                                                help="Proportion of rows sampled during scanning (default 55%, roughly 50%-60% of table rows). Small tables scan all available rows.",
+                                            )
+
+                                    with col_scan_btn:
+                                        st.write("")
+                                        st.write("")
+                                        run_auto_scan = st.button(
+                                            "Run Auto-Scan Across Workspace",
+                                            type="primary",
+                                            use_container_width=True,
+                                            key="num_run_auto_scan_btn",
+                                        )
+
+                                    if run_auto_scan:
+                                        with st.spinner("Scanning columns for numeric representations..."):
+                                            scan_cfg = NumericNormalizationConfig(
+                                                detection_threshold=float(scan_thresh),
+                                                sample_proportion=float(scan_sample_pct) / 100.0,
+                                            )
+                                            scan_results = scan_table_numeric_candidates(
+                                                engine, db_name, working_tbl, config=scan_cfg
+                                            )
+                                            st.session_state.numeric_scan_results = scan_results
+                                            for res in scan_results:
+                                                col_n = res["column"]
+                                                st.session_state.numeric_column_analyses[col_n] = res
+
+                                            # Immediately set active column to the first qualifying candidate
+                                            qual_cols = [
+                                                r["column"] for r in scan_results
+                                                if r["classification"] in (
+                                                    NumericDetectionClassification.INTEGER_CANDIDATE.value,
+                                                    NumericDetectionClassification.DECIMAL_CANDIDATE.value,
+                                                )
+                                            ]
+                                            if qual_cols:
+                                                st.session_state.numeric_selected_col = qual_cols[0]
+                                                st.session_state.num_active_tab_source = "auto"
+                                        st.rerun()
+
+                                    scan_results = st.session_state.get("numeric_scan_results")
+                                    if scan_results:
+                                        # Only qualifying text-based columns appear in automatic conversion target list
+                                        qualifying_candidates = [
+                                            r for r in scan_results
+                                            if r["classification"] in (
+                                                NumericDetectionClassification.INTEGER_CANDIDATE.value,
+                                                NumericDetectionClassification.DECIMAL_CANDIDATE.value,
+                                            )
+                                        ]
+
+                                        if qualifying_candidates:
+                                            st.markdown(
+                                                f'<div style="font-size: 0.85rem; color: #0F766E; margin-bottom: 0.75rem; font-weight: 600;">'
+                                                f'Scan complete: {len(scan_results)} text column(s) evaluated. '
+                                                f'Found {len(qualifying_candidates)} qualifying numeric candidate(s) (threshold ≥ {scan_thresh}%).'
+                                                f'</div>',
+                                                unsafe_allow_html=True,
+                                            )
+
+                                            # Build table rows for qualifying candidates
+                                            display_rows = []
+                                            for r in qualifying_candidates:
+                                                display_rows.append({
+                                                    "Column Name": r["column"],
+                                                    "Current Type": r["current_type"],
+                                                    "Classification": r["classification"],
+                                                    "Numeric %": f"{r['numeric_percentage']:.1f}%",
+                                                    "Valid Numbers": f"{r['valid_count']:,}",
+                                                    "Invalid / Ambiguous": f"{r['invalid_count'] + r['ambiguous_count'] + r['potential_identifier_count']:,}",
+                                                    "Recommended Type": r["recommended_type"],
+                                                    "Suggested Action": r["suggested_action"],
+                                                })
+
+                                            st.dataframe(
+                                                pd.DataFrame(display_rows),
+                                                use_container_width=True,
+                                                hide_index=True,
+                                            )
+
+                                            # Column selector from ONLY qualifying candidates
+                                            candidate_col_options = [r["column"] for r in qualifying_candidates]
+                                            st.markdown("##### Select Column to Configure & Convert")
+                                            c_sel_col, _ = st.columns([2.5, 2.5])
+                                            with c_sel_col:
+                                                cur_sel = st.session_state.get("numeric_selected_col")
+                                                def_idx = candidate_col_options.index(cur_sel) if cur_sel in candidate_col_options else 0
+
+                                                def _on_auto_picker_change():
+                                                    c_val = st.session_state.get("num_auto_col_picker")
+                                                    if c_val:
+                                                        if isinstance(c_val, dict):
+                                                            c_val = c_val.get("name", "")
+                                                        st.session_state.numeric_selected_col = str(c_val)
+                                                        st.session_state.num_active_tab_source = "auto"
+
+                                                sel_auto_col = st.selectbox(
+                                                    "Target Column from Qualifying Scan Results:",
+                                                    options=candidate_col_options,
+                                                    index=def_idx,
+                                                    key="num_auto_col_picker",
+                                                    on_change=_on_auto_picker_change,
+                                                )
+                                                # Synchronize active column directly with auto selectbox
+                                                if st.session_state.get("num_active_tab_source", "auto") == "auto" and sel_auto_col:
+                                                    st.session_state.numeric_selected_col = str(sel_auto_col)
+                                        else:
+                                            st.info(
+                                                f"ℹ️ No qualifying numeric candidate columns were detected under the current detection threshold ({scan_thresh}%). "
+                                                f"Ordinary text and non-numeric columns are excluded from automatic conversion. "
+                                                f"If you believe a column was missed, use the **'Select Column Manually'** tab to inspect and convert it."
+                                            )
+
+                                with num_tab_manual:
+                                    st.markdown(
+                                        '<div style="font-size: 0.9rem; color: var(--dq-slate); margin-bottom: 0.5rem;">'
+                                        '<b>Manual Column Selection & Deep Numeric Analysis</b>'
+                                        '</div>'
+                                        '<div style="font-size: 0.82rem; color: var(--dq-slate-muted); margin-bottom: 1rem;">'
+                                        'If automatic detection misses a column or classified it as ordinary text, you can manually select '
+                                        'any eligible text-based column here to initiate deep numeric compatibility analysis, value validation, and conversion without bypassing safety checks.'
+                                        '</div>',
+                                        unsafe_allow_html=True,
+                                    )
+
+                                    # Show table of all eligible text columns with their automatic detection status
+                                    cached_analyses = st.session_state.get("numeric_column_analyses", {})
+                                    manual_display_data = []
+                                    for cname in eligible_text_cols:
+                                        ctype = col_type_dict.get(cname, "TEXT")
+                                        if cname in cached_analyses:
+                                            det_status = cached_analyses[cname].get("classification", "Scanned")
+                                        else:
+                                            det_status = "Not Scanned Yet"
+                                        manual_display_data.append({
+                                            "Column Name": cname,
+                                            "Current Data Type": ctype,
+                                            "Automatic Detection Status": det_status,
+                                        })
+
+                                    with st.expander("All Eligible Text Columns & Detection Status", expanded=False):
+                                        st.dataframe(
+                                            pd.DataFrame(manual_display_data),
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
+
+                                    col_srch, col_pick, col_meta = st.columns([2, 2.5, 1.5])
+                                    with col_srch:
+                                        m_search = st.text_input(
+                                            "Filter columns by name:",
+                                            value="",
+                                            key="num_manual_search_input",
+                                            placeholder="Type column name...",
+                                        ).strip().lower()
+
+                                    filtered_manual_cols = [
+                                        c for c in eligible_text_cols
+                                        if not m_search or m_search in str(c).lower()
+                                    ]
+
+                                    with col_pick:
+                                        selected_manual_choice = st.selectbox(
+                                            "Select Any Column to Analyze:",
+                                            options=filtered_manual_cols if filtered_manual_cols else eligible_text_cols,
+                                            key="num_manual_dropdown",
+                                        )
+
+                                    cur_meta_type = col_type_dict.get(selected_manual_choice, "TEXT")
+                                    with col_meta:
+                                        st.markdown(
+                                            f'<div style="font-size: 0.82rem; padding-top: 1.85rem; color: var(--dq-slate);">'
+                                            f'Current Type: <code>{cur_meta_type}</code></div>',
+                                            unsafe_allow_html=True,
+                                        )
+
+                                    # Run deep analysis button
+                                    col_man_btn, _ = st.columns([2, 3])
+                                    with col_man_btn:
+                                        if st.button(
+                                            f"Analyze `{selected_manual_choice}` for Numeric Conversion",
+                                            type="primary",
+                                            use_container_width=True,
+                                            key="num_run_manual_analysis_btn",
+                                        ):
+                                            if isinstance(selected_manual_choice, dict):
+                                                selected_manual_choice = selected_manual_choice.get("name", "")
+                                            st.session_state.numeric_selected_col = str(selected_manual_choice)
+                                            st.session_state.num_active_tab_source = "manual"
+                                            st.rerun()
+
+                                # If a column is selected (via Auto Scan or Manual Selection)
+                                active_numeric_col = st.session_state.get("numeric_selected_col")
+                                if isinstance(active_numeric_col, dict):
+                                    active_numeric_col = active_numeric_col.get("name")
+                                if not isinstance(active_numeric_col, str) or not active_numeric_col or active_numeric_col not in eligible_text_cols:
+                                    scan_res = st.session_state.get("numeric_scan_results")
+                                    if scan_res:
+                                        qual_cols = [
+                                            r["column"] for r in scan_res
+                                            if r["classification"] in (
+                                                NumericDetectionClassification.INTEGER_CANDIDATE.value,
+                                                NumericDetectionClassification.DECIMAL_CANDIDATE.value,
+                                            )
+                                        ]
+                                        if qual_cols:
+                                            active_numeric_col = qual_cols[0]
+                                    if not active_numeric_col and eligible_text_cols:
+                                        active_numeric_col = eligible_text_cols[0]
+                                    elif not active_numeric_col:
+                                        active_numeric_col = None
+                                st.session_state.numeric_selected_col = active_numeric_col
+
+                                if active_numeric_col:
+                                    st.markdown("---")
+                                    st.markdown(
+                                        f'<div class="dq-section-title">Detailed Value Analysis & Conversion: <code>{active_numeric_col}</code></div>',
+                                        unsafe_allow_html=True,
+                                    )
+
+                                    # 1. Normalization Config controls (Accordion)
+                                    with st.expander("Numeric Normalization Rules", expanded=False):
+                                        c_norm1, c_norm2 = st.columns(2)
+                                        with c_norm1:
+                                            fmt_keys = list(NUMBER_FORMATS.keys())
+                                            sel_fmt = st.selectbox(
+                                                "Number Formatting Standard:",
+                                                options=fmt_keys,
+                                                index=0,
+                                                format_func=lambda k: NUMBER_FORMATS.get(k, k),
+                                                key="num_cfg_format",
+                                                help="Specify how commas and dots are interpreted for thousands and decimal marks.",
+                                            )
+                                            trim_ws = st.checkbox(
+                                                "Trim leading & trailing whitespace",
+                                                value=True,
+                                                key="num_cfg_trim",
+                                            )
+                                            norm_plus = st.checkbox(
+                                                "Normalize leading plus sign (+250 → 250)",
+                                                value=True,
+                                                key="num_cfg_plus",
+                                            )
+                                            strip_neg = st.checkbox(
+                                                "Strip negative sign / Convert to positive (-500 → 500)",
+                                                value=False,
+                                                key="num_cfg_neg",
+                                                help="When enabled, strips leading negative signs or converts negative values (including accounting parentheses) into positive numbers.",
+                                            )
+                                            sci_not = st.checkbox(
+                                                "Support scientific notation (e.g. 1.5e3 → 1500)",
+                                                value=False,
+                                                key="num_cfg_sci",
+                                            )
+                                        with c_norm2:
+                                            strip_curr = st.checkbox(
+                                                "Strip currency symbols ($, €, £, ¥, ₹, etc.)",
+                                                value=False,
+                                                key="num_cfg_curr",
+                                            )
+                                            strip_pct = st.checkbox(
+                                                "Strip percentage signs (%)",
+                                                value=False,
+                                                key="num_cfg_pct",
+                                                help="When enabled, removes percentage symbols and preserves numeric percentage-point values (e.g. '15%' becomes 15).",
+                                            )
+                                            allow_zeros = st.checkbox(
+                                                "Allow stripping leading zeros (e.g. '00125' → 125)",
+                                                value=False,
+                                                key="num_cfg_zeros",
+                                                help="Keep unchecked to protect identifier columns like postal codes, product codes, or customer numbers.",
+                                            )
+                                            inv_res = st.selectbox(
+                                                "Action on Invalid / Unresolved Values:",
+                                                options=["block", "set_null", "keep_text"],
+                                                index=0,
+                                                format_func=lambda r: {
+                                                    "block": "Block conversion if invalid values exist (Strict Safety)",
+                                                    "set_null": "Set invalid and ambiguous values to NULL (Safe Conversion)",
+                                                    "keep_text": "Keep column as text (Cancel Conversion)",
+                                                }.get(r, r),
+                                                key="num_cfg_inv_res",
+                                                help="Never silently drops rows. Explicitly configure whether unparseable values abort or are nullified.",
+                                            )
+
+                                    active_config = NumericNormalizationConfig(
+                                        trim_whitespace=trim_ws,
+                                        number_format=sel_fmt,
+                                        normalize_plus_sign=norm_plus,
+                                        strip_negative_sign=strip_neg,
+                                        allow_scientific=sci_not,
+                                        strip_currency=strip_curr,
+                                        strip_percentage=strip_pct,
+                                        allow_leading_zeros=allow_zeros,
+                                        invalid_resolution=inv_res,
+                                    )
+
+                                    # Run analysis on the selected column with the active config
+                                    col_analysis = analyze_numeric_column(
+                                        engine, db_name, working_tbl, active_numeric_col, active_config
+                                    )
+                                    st.session_state.numeric_column_analyses[active_numeric_col] = col_analysis
+
+                                    # KPI summary cards
+                                    k_col1, k_col2, k_col3, k_col4 = st.columns(4)
+                                    total_r = col_analysis["total_rows"]
+                                    valid_r = col_analysis["valid_count"]
+                                    compat_pct = col_analysis["numeric_percentage"]
+                                    rec_type = col_analysis["recommended_type"]
+                                    classif = col_analysis["classification"]
+
+                                    with k_col1:
+                                        st.markdown(
+                                            f"""
+                                            <div class="kpi-card">
+                                                <div class="kpi-label">Analyzed Rows</div>
+                                                <div class="kpi-value">{total_r:,}</div>
+                                                <div class="kpi-subtext">Current type: {col_analysis['current_type']}</div>
+                                            </div>
+                                            """,
+                                            unsafe_allow_html=True,
+                                        )
+                                    with k_col2:
+                                        kpi_cls = "kpi-card-success" if compat_pct >= 90 else "kpi-card-warning" if compat_pct >= 50 else ""
+                                        st.markdown(
+                                            f"""
+                                            <div class="kpi-card {kpi_cls}">
+                                                <div class="kpi-label">Numeric Compatibility</div>
+                                                <div class="kpi-value">{compat_pct:.1f}%</div>
+                                                <div class="kpi-subtext">{valid_r:,} valid numbers</div>
+                                            </div>
+                                            """,
+                                            unsafe_allow_html=True,
+                                        )
+                                    with k_col3:
+                                        st.markdown(
+                                            f"""
+                                            <div class="kpi-card">
+                                                <div class="kpi-label">Classification</div>
+                                                <div class="kpi-value" style="font-size: 1.05rem; word-break: break-word;">{classif}</div>
+                                                <div class="kpi-subtext">Integer digits: {col_analysis['max_integer_digits']} | Scale: {col_analysis['max_scale']}</div>
+                                            </div>
+                                            """,
+                                            unsafe_allow_html=True,
+                                        )
+                                    with k_col4:
+                                        st.markdown(
+                                            f"""
+                                            <div class="kpi-card kpi-card-success">
+                                                <div class="kpi-label">Recommended Type</div>
+                                                <div class="kpi-value" style="font-size: 1.25rem;">{rec_type}</div>
+                                                <div class="kpi-subtext">Zero truncation guarantee</div>
+                                            </div>
+                                            """,
+                                            unsafe_allow_html=True,
+                                        )
+
+                                    # Detailed Value Breakdown Chips
+                                    inv_cnt = col_analysis["invalid_count"]
+                                    ambig_cnt = col_analysis["ambiguous_count"]
+                                    ident_cnt = col_analysis["potential_identifier_count"]
+                                    null_cnt = col_analysis["null_count"]
+                                    empty_cnt = col_analysis["empty_count"]
+
+                                    st.markdown(
+                                        f"""
+                                        <div style="margin-top: 0.5rem; margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                                            <span class="badge-pill badge-neutral">Valid Integers: <b>{col_analysis['integer_count']:,}</b></span>
+                                            <span class="badge-pill badge-neutral">Valid Decimals: <b>{col_analysis['decimal_count']:,}</b></span>
+                                            <span class="badge-pill badge-neutral">Required Normalization: <b>{col_analysis['normalized_count']:,}</b></span>
+                                            <span class="badge-pill {'badge-warning' if inv_cnt > 0 else 'badge-neutral'}">Invalid Values: <b>{inv_cnt:,}</b></span>
+                                            <span class="badge-pill {'badge-warning' if ambig_cnt > 0 else 'badge-neutral'}">Ambiguous Formats: <b>{ambig_cnt:,}</b></span>
+                                            <span class="badge-pill {'badge-warning' if ident_cnt > 0 else 'badge-neutral'}">Potential Identifiers: <b>{ident_cnt:,}</b></span>
+                                            <span class="badge-pill badge-neutral">NULL Values: <b>{null_cnt:,}</b></span>
+                                            <span class="badge-pill badge-neutral">Empty / Whitespace: <b>{empty_cnt:,}</b></span>
+                                        </div>
+                                        """,
+                                        unsafe_allow_html=True,
+                                    )
+
+                                    # Section 5: Target Numeric Data Type Selection
+                                    precision_warnings = []
+                                    with st.container(border=True):
+                                        st.markdown("##### Target Numeric Data Type")
+                                        c_type1, c_type2 = st.columns([2.5, 2])
+                                        with c_type1:
+                                            # Supported MySQL target types: INT, BIGINT, DECIMAL(p,s), DOUBLE
+                                            type_options = ["INT", "BIGINT", "DECIMAL(p,s)", "DOUBLE"]
+                                            rec_prefix = rec_type.split("(")[0].strip()
+                                            if rec_prefix == "DECIMAL":
+                                                default_type_idx = 2
+                                            elif rec_prefix == "BIGINT":
+                                                default_type_idx = 1
+                                            elif rec_prefix == "INT":
+                                                default_type_idx = 0
+                                            elif rec_prefix == "DOUBLE":
+                                                default_type_idx = 3
+                                            else:
+                                                default_type_idx = 2
+
+                                            selected_target_type = st.selectbox(
+                                                "Select Target Data Type:",
+                                                options=type_options,
+                                                index=default_type_idx,
+                                                key="num_target_type_select",
+                                                help="Recommended type is based on data profiling. DECIMAL provides exact precision for financial amounts. Integer types suit whole numbers. DOUBLE provides floating-point approximation.",
+                                            )
+
+                                            if selected_target_type == "DECIMAL(p,s)":
+                                                cd_p, cd_s = st.columns(2)
+                                                with cd_p:
+                                                    dec_precision = st.number_input(
+                                                        "Precision (p)",
+                                                        min_value=1,
+                                                        max_value=65,
+                                                        value=max(col_analysis["max_integer_digits"] + col_analysis["max_scale"] + 2, 10),
+                                                        key="num_dec_p",
+                                                        help="Total number of significant digits (1-65).",
+                                                    )
+                                                with cd_s:
+                                                    dec_scale = st.number_input(
+                                                        "Scale (s)",
+                                                        min_value=0,
+                                                        max_value=30,
+                                                        value=max(col_analysis["max_scale"], 2),
+                                                        key="num_dec_s",
+                                                        help="Number of digits to the right of the decimal point (0-30).",
+                                                    )
+                                                target_sql_type = f"DECIMAL({dec_precision}, {dec_scale})"
+                                            else:
+                                                target_sql_type = selected_target_type
+
+                                            st.caption(f"Recommended: `COLUMN {active_numeric_col} {rec_type}` | Selected: `COLUMN {active_numeric_col} {target_sql_type}`")
+
+                                        with c_type2:
+                                            # Type checks & Precision / Truncation / Overflow risk warnings
+                                            st.markdown("<div style='font-size: 0.82rem; font-weight: 600; color: var(--dq-slate);'>Precision & Safety Checks:</div>", unsafe_allow_html=True)
+                                            if selected_target_type in ("INT", "BIGINT") and col_analysis["decimal_count"] > 0:
+                                                warn_msg = f"Fractional Truncation Risk: Column contains {col_analysis['decimal_count']} decimal value(s). Converting to {selected_target_type} will discard fractional components."
+                                                precision_warnings.append(warn_msg)
+                                                st.warning(warn_msg)
+                                            elif selected_target_type == "INT" and col_analysis["max_integer_digits"] > 9:
+                                                warn_msg = f"Integer Overflow Risk: Max integer digits is {col_analysis['max_integer_digits']}, which may exceed MySQL INT range (-2.14B to +2.14B). Consider BIGINT."
+                                                precision_warnings.append(warn_msg)
+                                                st.warning(warn_msg)
+                                            elif selected_target_type == "DECIMAL(p,s)":
+                                                if dec_scale < col_analysis["max_scale"]:
+                                                    warn_msg = f"Fractional Scale Truncation: Configured scale ({dec_scale}) is less than observed decimal scale ({col_analysis['max_scale']})."
+                                                    precision_warnings.append(warn_msg)
+                                                    st.warning(warn_msg)
+                                                if (dec_precision - dec_scale) < col_analysis["max_integer_digits"]:
+                                                    warn_msg = f"Decimal Overflow Risk: Integer digits ({dec_precision - dec_scale}) is less than observed integer digits ({col_analysis['max_integer_digits']})."
+                                                    precision_warnings.append(warn_msg)
+                                                    st.warning(warn_msg)
+                                            elif selected_target_type == "DOUBLE" and col_analysis["decimal_count"] > 0:
+                                                warn_msg = "Floating-point precision: DOUBLE uses IEEE 754 floating-point representation. For currency/exact financial amounts, DECIMAL(p,s) is recommended."
+                                                precision_warnings.append(warn_msg)
+                                                st.info(warn_msg)
+
+                                            if not precision_warnings:
+                                                st.success("Target type fully accommodates observed numeric range and precision without truncation.")
+
+                                    # Section 6: Choose the Conversion Destination
+                                    with st.container(border=True):
+                                        st.markdown("##### Application Mode & Destination")
+                                        has_unresolved_anomalies = (inv_cnt + ambig_cnt + ident_cnt) > 0
+
+                                        if has_unresolved_anomalies:
+                                            st.info(
+                                                f"**New-Column Conversion Required:** Column `{active_numeric_col}` contains "
+                                                f"**{inv_cnt + ambig_cnt + ident_cnt}** unresolved anomaly/invalid value(s). "
+                                                "**'Convert Existing Column' is disabled** because in-place modification would result in permanent data loss or conversion errors. "
+                                                "**Creating a new column preserves original values** in your source column and allows valid records to be converted, "
+                                                "while unresolved records remain blank (SQL NULL) in the new column."
+                                            )
+                                            dest_choice = st.radio(
+                                                "Conversion Destination:",
+                                                options=[
+                                                    "Option B: Create a New Column",
+                                                ],
+                                                index=0,
+                                                key="num_dest_radio",
+                                                help="Creating a new column preserves original values and allows valid records to be converted while unresolved records remain blank in the new column.",
+                                            )
+                                            st.caption("*Option A: Convert Existing Column is disabled because the column contains unresolved anomalies.*")
+                                        else:
+                                            dest_choice = st.radio(
+                                                "Conversion Destination:",
+                                                options=[
+                                                    "Option A: Convert Existing Column",
+                                                    "Option B: Create a New Column",
+                                                ],
+                                                index=0,
+                                                key="num_dest_radio",
+                                                help="Option A modifies the column in-place in the authorized workspace table. Option B creates a new numeric column and keeps the original text column unchanged.",
+                                            )
+
+                                        try:
+                                            existing_tbl_cols = [c["name"] for c in inspect(engine).get_columns(working_tbl)]
+                                        except Exception:
+                                            existing_tbl_cols = []
+                                        col_collision_error = None
+                                        col_name_invalid_error = None
+
+                                        if "Option A" in dest_choice:
+                                            conv_mode = "in_place"
+                                            new_col_name = None
+                                            st.markdown(
+                                                f'<div style="font-size: 0.88rem; color: var(--dq-slate); margin-top: 0.25rem;">'
+                                                f'<b>Existing Column:</b> <code>{active_numeric_col}</code>: {col_analysis["current_type"]} → <code>{target_sql_type}</code>'
+                                                f'</div>',
+                                                unsafe_allow_html=True,
+                                            )
+                                        else:
+                                            conv_mode = "new_column"
+                                            c_dest1, c_dest2 = st.columns([2.5, 2.5])
+                                            with c_dest1:
+                                                proposed_default_name = f"{active_numeric_col}_numeric"
+                                                new_col_name = st.text_input(
+                                                    "New Target Column Name:",
+                                                    value=proposed_default_name,
+                                                    key="num_new_col_name_input",
+                                                    help="Original text column will remain completely untouched. Enter a valid MySQL identifier for the new column.",
+                                                ).strip()
+
+                                            with c_dest2:
+                                                # Validate identifier and check collisions
+                                                if not new_col_name or not re.match(r"^[a-zA-Z0-9_$]+$", new_col_name) or len(new_col_name) > 64:
+                                                    col_name_invalid_error = "Invalid column name. Must contain only alphanumeric characters, underscores, or '$' (max 64 chars)."
+                                                    st.error(col_name_invalid_error)
+                                                elif new_col_name in existing_tbl_cols:
+                                                    col_collision_error = f"Column collision: A column named '{new_col_name}' already exists in table '{working_tbl}'. Please choose a distinct name."
+                                                    st.error(col_collision_error)
+                                                else:
+                                                    st.success(f"Valid destination: `{new_col_name}` ({target_sql_type})")
+
+                                    # Section 7: Final Preview and Confirmation
+                                    st.markdown("---")
+                                    st.markdown("##### Final Preview and Confirmation Summary")
+
+                                    dest_desc = (
+                                        f"Existing Column (`{active_numeric_col}`)"
+                                        if conv_mode == "in_place"
+                                        else f"New Column (`{new_col_name}`)"
+                                    )
+                                    norm_rules_summary = (
+                                        f"Trim: {'Yes' if trim_ws else 'No'} | "
+                                        f"Format: {NUMBER_FORMATS.get(sel_fmt, sel_fmt).split('(')[0].strip()} | "
+                                        f"Plus Sign: {'Yes' if norm_plus else 'No'} | "
+                                        f"Negative Sign: {'Strip / Positive' if strip_neg else 'Preserve'} | "
+                                        f"Percentage (%): {'Preserve Value' if strip_pct else 'No'} | "
+                                        f"Currency: {'Yes' if strip_curr else 'No'} | "
+                                        f"Leading Zeros: {'Allowed' if allow_zeros else 'Protected'} | "
+                                        f"Invalid Action: {inv_res}"
+                                    )
+                                    warn_summary = " • ".join(precision_warnings) if precision_warnings else "None detected (Clean numeric mapping)"
+
+                                    with st.container(border=True):
+                                        c_sum1, c_sum2 = st.columns(2)
+                                        with c_sum1:
+                                            st.markdown(
+                                                f"""
+                                                <div style="font-size: 0.85rem; line-height: 1.6; color: var(--dq-slate);">
+                                                    <div><b>Selected Table:</b> <code>{working_tbl}</code> <span style="font-size: 0.78rem; color: var(--dq-slate-muted);">(Source: {tbl_name})</span></div>
+                                                    <div><b>Selected Source Column:</b> <code>{active_numeric_col}</code></div>
+                                                    <div><b>Current Data Type:</b> <code>{col_analysis['current_type']}</code></div>
+                                                    <div><b>Target Numeric Type:</b> <code>{target_sql_type}</code></div>
+                                                    <div><b>Conversion Destination:</b> {dest_desc}</div>
+                                                    <div><b>New Column Name:</b> <code>{new_col_name if new_col_name else 'N/A'}</code></div>
+                                                    <div><b>Normalization Rules:</b> <span style="font-size: 0.8rem;">{norm_rules_summary}</span></div>
+                                                </div>
+                                                    <div><b>Invalid / Unresolved Values:</b> {inv_cnt + ambig_cnt + ident_cnt:,}</div>
+                                                    <div><b>NULL Values:</b> {null_cnt:,}</div>
+                                                    <div><b>Precision / Data-Loss Warnings:</b> <span style="color: {'#B45309' if precision_warnings else '#0F766E'};">{warn_summary}</span></div>
+                                                </div>
+                                                """,
+                                                unsafe_allow_html=True,
+                                            )
+
+                                    # Preview before conversion: Summary Metric Chips
+                                    null_or_empty_cnt = null_cnt + col_analysis.get("empty_count", 0)
+                                    pm1, pm2, pm3, pm4 = st.columns(4)
+                                    with pm1:
+                                        st.metric("Successfully Converted", f"{valid_r:,}", help="Count of valid numeric values that will be converted")
+                                    with pm2:
+                                        st.metric("Invalid Values", f"{inv_cnt:,}", help="Values containing invalid characters or syntax")
+                                    with pm3:
+                                        st.metric("Ambiguous Values", f"{ambig_cnt + ident_cnt:,}", help="Values with ambiguous separators or protected identifier formats")
+                                    with pm4:
+                                        st.metric("NULL / Empty Values", f"{null_or_empty_cnt:,}", help="Existing SQL NULLs or empty whitespace strings")
+
+                                    if conv_mode == "new_column":
+                                        st.info(
+                                            f"**New Column Safe Conversion:** Creating `{new_col_name}` ({target_sql_type}). "
+                                            f"Every safely convertible value will be converted according to selected normalization rules. "
+                                            f"**Invalid and ambiguous values will become SQL NULL** in the new column, "
+                                            f"while their original values remain completely untouched and available in source column `{active_numeric_col}`."
+                                        )
+
+                                    # Value-Level Conversion Preview Table (Original value, Proposed numeric value, Conversion status, Reason)
+                                    preview_rows = col_analysis.get("sample_preview", [])
+                                    if preview_rows:
+                                        preview_records = []
+                                        for p in preview_rows:
+                                            orig_val = p.get("Original value", p.get("original", ""))
+                                            is_val = p.get("is_valid", False)
+                                            if conv_mode == "new_column" and not is_val:
+                                                prop_val = "SQL NULL"
+                                            else:
+                                                prop_val = p.get("Proposed numeric value", p.get("Proposed value", p.get("normalized", "SQL NULL")))
+
+                                            c_status = p.get("Conversion status", p.get("Status", "Valid" if is_val else "Invalid"))
+                                            c_reason = p.get("Reason", p.get("error_reason", "-") if not is_val else "-")
+                                            if not c_reason or c_reason == "":
+                                                c_reason = "-" if is_val else "Cannot convert safely"
+
+                                            preview_records.append({
+                                                "Original value": orig_val,
+                                                "Proposed numeric value": prop_val,
+                                                "Conversion status": c_status,
+                                                "Reason": c_reason,
+                                            })
+
+                                        st.markdown("###### Value-Level Conversion Preview")
+                                        st.dataframe(
+                                            pd.DataFrame(preview_records),
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
+
+                                    total_blocking_issues = inv_cnt + ambig_cnt + ident_cnt
+                                    is_blocked_by_invalid = (conv_mode == "in_place" and total_blocking_issues > 0 and inv_res == "block")
+                                    is_blocked_by_name = (conv_mode == "new_column" and bool(col_name_invalid_error or col_collision_error))
+                                    is_blocked = is_blocked_by_invalid or is_blocked_by_name
+
+                                    if is_blocked_by_invalid:
+                                        st.warning(
+                                            f"**In-Place Conversion Blocked:** `{total_blocking_issues}` value(s) in `{active_numeric_col}` "
+                                            f"cannot be converted safely without resolution (invalid characters, ambiguous formatting, or protected identifier). "
+                                            f"Please choose **'Option B: Create a New Column'** to preserve original values and leave unresolved records blank (SQL NULL), "
+                                            f"or change **Action on Invalid Values** to **'Set invalid and ambiguous values to NULL'** to proceed in-place."
+                                        )
+
+                                    if is_blocked_by_name:
+                                        st.warning("**Conversion Blocked:** Please resolve the new column name collision or naming syntax error above.")
+
+                                    # Footer Action Bar: Back button on the left, safety note, and Confirm Conversion Primary button on the right
+                                    st.markdown('<div class="dc-footer-action-bar" style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">', unsafe_allow_html=True)
+                                    col_foot_left, col_foot_right = st.columns([1.5, 3.5], vertical_alignment="center")
+                                    with col_foot_left:
+                                        if st.button("Back to Cleaning Hub", key="num_footer_back_btn"):
+                                            nav_to_view("🧹 Cleaning Workspace", "🏠 Cleaning Hub")
+                                            st.rerun()
+                                    with col_foot_right:
+                                        col_note, col_confirm = st.columns([2.3, 1.7], vertical_alignment="center")
+                                        with col_note:
+                                            st.caption(f"Applies strictly to `{working_tbl}`. Source remains read-only.")
+                                        with col_confirm:
+                                            execute_btn = st.button(
+                                                "Confirm Conversion",
+                                                type="primary",
+                                                use_container_width=True,
+                                                disabled=is_blocked,
+                                                key="num_confirm_conversion_btn",
+                                                help="Executes schema conversion strictly within the authorized workspace table.",
+                                            )
+                                    st.markdown('</div>', unsafe_allow_html=True)
+
+                                    if execute_btn:
+                                        with st.spinner(f"Converting `{active_numeric_col}` to `{target_sql_type}` in `{working_tbl}`..."):
+                                            conv_ok, conv_msg, conv_rep = convert_column_to_numeric_workspace(
+                                                engine,
+                                                db_name,
+                                                working_tbl,
+                                                active_numeric_col,
+                                                target_sql_type,
+                                                config=active_config,
+                                                conversion_mode=conv_mode,
+                                                new_column_name=new_col_name,
+                                            )
+
+                                        if conv_ok:
+                                            st.session_state.numeric_conversion_report = conv_rep
+                                            st.session_state.numeric_history.append(conv_rep)
+
+                                            # Record in audit log
+                                            if "cleaning_history" not in st.session_state:
+                                                st.session_state.cleaning_history = []
+                                            st.session_state.cleaning_history.append({
+                                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                "operation": "Numeric Data Conversion",
+                                                "table": working_tbl,
+                                                "source_column": active_numeric_col,
+                                                "target_type": target_sql_type,
+                                                "destination": dest_desc,
+                                                "normalization_rules": norm_rules_summary,
+                                                "rows_converted": conv_rep.get("rows_converted", 0),
+                                                "invalid_nullified": conv_rep.get("invalid_nullified", 0),
+                                                "status": "SUCCESS",
+                                                "verified_type": conv_rep.get("verified_type"),
+                                            })
+
+                                            # Refresh workspace profile and cache
+                                            st.session_state.profile_result = None
+                                            st.session_state.numeric_scan_results = None
+                                            st.success(f"{conv_msg}")
+                                            st.rerun()
+                                        else:
+                                            st.error(f"Conversion Failed: {conv_msg}")
+
+                                    # Post-Conversion Executive Report
+                                    if st.session_state.get("numeric_conversion_report"):
+                                        c_rep = st.session_state.numeric_conversion_report
+                                        st.markdown(
+                                            '<div class="dq-section-title" style="margin-top: 1.5rem;">Executive Numeric Conversion Report</div>',
+                                            unsafe_allow_html=True,
+                                        )
+                                        with st.container(border=True):
+                                            st.success(
+                                                f"Column `{c_rep.get('column_name')}` successfully transformed to `{c_rep.get('target_type')}` "
+                                                f"(Verified MySQL Type: `{c_rep.get('verified_type')}`)."
+                                            )
+                                            rc_k1, rc_k2, rc_k3 = st.columns(3)
+                                            with rc_k1:
+                                                st.markdown(
+                                                    f"""
+                                                    <div class="kpi-card kpi-card-success">
+                                                        <div class="kpi-label">Rows Converted</div>
+                                                        <div class="kpi-value">{c_rep.get('rows_converted', 0):,}</div>
+                                                        <div class="kpi-subtext">Values transformed</div>
+                                                    </div>
+                                                    """,
+                                                    unsafe_allow_html=True,
+                                                )
+                                            with rc_k2:
+                                                st.markdown(
+                                                    f"""
+                                                    <div class="kpi-card">
+                                                        <div class="kpi-label">Invalid Set to NULL</div>
+                                                        <div class="kpi-value">{c_rep.get('invalid_nullified', 0):,}</div>
+                                                        <div class="kpi-subtext">Non-numeric records</div>
+                                                    </div>
+                                                    """,
+                                                    unsafe_allow_html=True,
+                                                )
+                                            with rc_k3:
+                                                st.markdown(
+                                                    f"""
+                                                    <div class="kpi-card">
+                                                        <div class="kpi-label">Total Table Rows</div>
+                                                        <div class="kpi-value">{c_rep.get('total_rows', 0):,}</div>
+                                                        <div class="kpi-subtext">Row count preserved</div>
+                                                    </div>
+                                                    """,
+                                                    unsafe_allow_html=True,
+                                                )
+
+                        elif active_sub == "🤖 AI Assistant":
+                            if not _ai_page_rendered:
+                                render_ai_assistant_main(
+                                    on_back_to_hub=lambda: nav_to_view("🧹 Cleaning Workspace", "🏠 Cleaning Hub")
+                                )
+
+                        elif active_sub == "🧠 AI Column Analysis and Cleaning":
+                            render_ai_column_cleaning_view(
+                                engine=engine,
+                                db_name=db_name,
+                                tbl_name=tbl_name,
+                                on_back_to_hub=lambda: nav_to_view("🧹 Cleaning Workspace", "🏠 Cleaning Hub")
+                            )
 
             # ── Floating Window (Modal Dialog): Data Profile ────────────────
             if st.session_state.get("show_profile_dialog"):

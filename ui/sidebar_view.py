@@ -12,7 +12,10 @@ Provides components and styling for the redesigned sidebar matching the referenc
 """
 
 from __future__ import annotations
+import html
+from typing import Optional, Union
 import streamlit as st
+from ui.components import render_html
 
 
 def get_sidebar_css() -> str:
@@ -30,9 +33,16 @@ def get_sidebar_css() -> str:
         width: 326px !important;
     }
 
+    [data-testid="stSidebarHeader"] {
+        height: 0 !important;
+        min-height: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+
     [data-testid="stSidebar"] > div:first-child,
     [data-testid="stSidebarContent"] {
-        padding: 20px 18px 36px 18px !important;
+        padding: 24px 18px 36px 18px !important;
         height: 100vh !important;
         overflow-y: auto !important;
         box-sizing: border-box !important;
@@ -149,9 +159,9 @@ def get_sidebar_css() -> str:
         transform: scale(1.04);
     }
     .sb-header-teal-divider {
-        height: 2px;
-        background: #0D9488;
-        border-radius: 1px;
+        height: 1px !important;
+        background: #E2E8F0 !important;
+        border-radius: 0 !important;
         margin-top: 14px;
         margin-bottom: 18px;
         width: 100%;
@@ -613,13 +623,268 @@ def get_sidebar_css() -> str:
         height: 100% !important;
         display: block !important;
     }
+
+    /* ─── Switch Connection: Ghost Button Expander ───────────── */
+    [data-testid="stSidebar"] [data-testid="stExpander"] {
+        border: none !important;
+        border-top: none !important;
+        border-bottom: none !important;
+        box-shadow: none !important;
+        background: transparent !important;
+        margin: 4px 0 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary {
+        border: none !important;
+        border-top: none !important;
+        border-bottom: none !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        padding: 6px 0 !important;
+        color: #475569 !important;
+        font-size: 13px !important;
+        font-weight: 500 !important;
+        border-radius: 6px !important;
+        height: 40px !important;
+        min-height: 40px !important;
+        transition: all 0.15s ease !important;
+        display: flex !important;
+        align-items: center !important;
+        width: 100% !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+        color: #0F766E !important;
+        background: rgba(15, 118, 110, 0.06) !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary:focus,
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary:focus-visible {
+        outline: none !important;
+        box-shadow: none !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+        border: 1px solid #E2E8F0 !important;
+        border-radius: 8px !important;
+        background: #FFFFFF !important;
+        padding: 12px !important;
+        margin-top: 6px !important;
+    }
+
+    /* ─── Data Profiling Section Label & Menu Items ──────────── */
+    .sidebar-section-header,
+    .sb-profiling-label {
+        font-size: 12px !important;
+        font-weight: 500 !important;
+        color: #64748B !important;
+        text-transform: none !important;
+        letter-spacing: normal !important;
+        margin-top: 18px !important;
+        margin-bottom: 6px !important;
+        padding: 0 !important;
+        text-align: left !important;
+    }
+    div[class*="st-key-sb_prof_src_btn"] button,
+    div[class*="st-key-sb_prof_ws_btn"] button {
+        border: none !important;
+        box-shadow: none !important;
+        background: transparent !important;
+        color: #334155 !important;
+        font-size: 13px !important;
+        font-weight: 500 !important;
+        border-radius: 8px !important;
+        height: 40px !important;
+        min-height: 40px !important;
+        padding: 0 12px !important;
+        text-align: left !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 10px !important;
+        width: 100% !important;
+        transition: background 0.15s ease, color 0.15s ease !important;
+    }
+    /* Table icon for Source Table Profiling — fixed 20px icon slot */
+    div[class*="st-key-sb_prof_src_btn"] button::before {
+        content: '' !important;
+        display: inline-block !important;
+        width: 20px !important;
+        height: 20px !important;
+        min-width: 20px !important;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2364748B' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3v18'/%3E%3Crect width='18' height='18' x='3' y='3' rx='2'/%3E%3Cpath d='M3 9h18'/%3E%3Cpath d='M3 15h18'/%3E%3C/svg%3E") !important;
+        background-repeat: no-repeat !important;
+        background-size: contain !important;
+    }
+    /* Bar chart icon for Workspace Profiling — fixed 20px icon slot */
+    div[class*="st-key-sb_prof_ws_btn"] button::before {
+        content: '' !important;
+        display: inline-block !important;
+        width: 20px !important;
+        height: 20px !important;
+        min-width: 20px !important;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2364748B' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='12' x2='12' y1='20' y2='10'/%3E%3Cline x1='18' x2='18' y1='20' y2='4'/%3E%3Cline x1='6' x2='6' y1='20' y2='16'/%3E%3C/svg%3E") !important;
+        background-repeat: no-repeat !important;
+        background-size: contain !important;
+    }
+    div[class*="st-key-sb_prof_src_btn"] button:hover,
+    div[class*="st-key-sb_prof_ws_btn"] button:hover {
+        background: rgba(15, 118, 110, 0.08) !important;
+        color: #0F766E !important;
+    }
+    div[class*="st-key-sb_prof_src_btn"] button:hover::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%230F766E' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3v18'/%3E%3Crect width='18' height='18' x='3' y='3' rx='2'/%3E%3Cpath d='M3 9h18'/%3E%3Cpath d='M3 15h18'/%3E%3C/svg%3E") !important;
+    }
+    div[class*="st-key-sb_prof_ws_btn"] button:hover::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%230F766E' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='12' x2='12' y1='20' y2='10'/%3E%3Cline x1='18' x2='18' y1='20' y2='4'/%3E%3Cline x1='6' x2='6' y1='20' y2='16'/%3E%3C/svg%3E") !important;
+    }
+    div[class*="st-key-sb_prof_src_btn"]:has(button[kind="primary"]) button,
+    div[class*="st-key-sb_prof_ws_btn"]:has(button[kind="primary"]) button {
+        background: #F0FDFA !important;
+        color: #0F766E !important;
+        font-weight: 600 !important;
+    }
+    div[class*="st-key-sb_prof_src_btn"]:has(button[kind="primary"]) button::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%230F766E' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3v18'/%3E%3Crect width='18' height='18' x='3' y='3' rx='2'/%3E%3Cpath d='M3 9h18'/%3E%3Cpath d='M3 15h18'/%3E%3C/svg%3E") !important;
+    }
+    div[class*="st-key-sb_prof_ws_btn"]:has(button[kind="primary"]) button::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%230F766E' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='12' x2='12' y1='20' y2='10'/%3E%3Cline x1='18' x2='18' y1='20' y2='4'/%3E%3Cline x1='6' x2='6' y1='20' y2='16'/%3E%3C/svg%3E") !important;
+    }
+    div[class*="st-key-sb_prof_src_btn_disabled"] button,
+    div[class*="st-key-sb_prof_ws_btn_disabled"] button,
+    div[class*="st-key-sb_prof_ws_btn_disabled_no_ws"] button {
+        border: none !important;
+        box-shadow: none !important;
+        background: transparent !important;
+        color: #94A3B8 !important;
+        font-size: 13px !important;
+        border-radius: 8px !important;
+        height: 40px !important;
+        min-height: 40px !important;
+        padding: 0 12px !important;
+        text-align: left !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 10px !important;
+        width: 100% !important;
+    }
+    div[class*="st-key-sb_prof_src_btn_disabled"] button::before {
+        content: '' !important;
+        display: inline-block !important;
+        width: 18px !important;
+        height: 18px !important;
+        min-width: 18px !important;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3v18'/%3E%3Crect width='18' height='18' x='3' y='3' rx='2'/%3E%3Cpath d='M3 9h18'/%3E%3Cpath d='M3 15h18'/%3E%3C/svg%3E") !important;
+        background-repeat: no-repeat !important;
+        background-size: contain !important;
+    }
+    div[class*="st-key-sb_prof_ws_btn_disabled"] button::before,
+    div[class*="st-key-sb_prof_ws_btn_disabled_no_ws"] button::before {
+        content: '' !important;
+        display: inline-block !important;
+        width: 18px !important;
+        height: 18px !important;
+        min-width: 18px !important;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='12' x2='12' y1='20' y2='10'/%3E%3Cline x1='18' x2='18' y1='20' y2='4'/%3E%3Cline x1='6' x2='6' y1='20' y2='16'/%3E%3C/svg%3E") !important;
+        background-repeat: no-repeat !important;
+        background-size: contain !important;
+    }
+
+    /* ─── Pinned Destructive Disconnect Button ────────────────── */
+    .sb-disconnect-divider {
+        margin-top: 24px !important;
+        padding-top: 14px !important;
+        border-top: 1px solid #E2E8F0 !important;
+        width: 100% !important;
+    }
+    div[class*="st-key-sb_disconnect_btn"] {
+        margin-top: 12px !important;
+        width: 100% !important;
+    }
+    div[class*="st-key-sb_disconnect_btn"] button {
+        background: #FFFFFF !important;
+        background-color: #FFFFFF !important;
+        border: 1px solid #FECDD3 !important;
+        color: #DC2626 !important;
+        font-weight: 600 !important;
+        font-size: 13px !important;
+        border-radius: 8px !important;
+        width: 100% !important;
+        height: 40px !important;
+        min-height: 40px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 8px !important;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+        transition: all 0.15s ease !important;
+    }
+    div[class*="st-key-sb_disconnect_btn"] button::before {
+        content: '' !important;
+        display: inline-block !important;
+        width: 18px !important;
+        height: 18px !important;
+        min-width: 18px !important;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23DC2626' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'/%3E%3Cpolyline points='16 17 21 12 16 7'/%3E%3Cline x1='21' x2='9' y1='12' y2='12'/%3E%3C/svg%3E") !important;
+        background-repeat: no-repeat !important;
+        background-size: contain !important;
+    }
+    div[class*="st-key-sb_disconnect_btn"] button:hover {
+        background: #FFF1F2 !important;
+        background-color: #FFF1F2 !important;
+        border-color: #FDA4AF !important;
+        color: #B91C1C !important;
+    }
+    div[class*="st-key-sb_disconnect_btn"] button:hover::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23B91C1C' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'/%3E%3Cpolyline points='16 17 21 12 16 7'/%3E%3Cline x1='21' x2='9' y1='12' y2='12'/%3E%3C/svg%3E") !important;
+    }
+    div[class*="st-key-sb_disconnect_btn"] button p {
+        color: #DC2626 !important;
+    }
+    div[class*="st-key-sb_disconnect_btn"] button:hover p {
+        color: #B91C1C !important;
+    }
     </style>
     """
 
 
-def render_sidebar_brand_redesign() -> None:
-    """Renders the top branding header with mint square logo, titles, collapse button, and teal divider."""
-    html = """
+def render_sidebar_brand_redesign(
+    connected: Optional[bool] = None,
+    host: Optional[str] = None,
+    port: Optional[Union[str, int]] = None,
+    username: Optional[str] = None,
+    server_ver: Optional[str] = None,
+) -> None:
+    """Renders the top branding header with mint square logo, titles, collapse button, compact connection line, and teal divider."""
+    is_conn = connected if connected is not None else st.session_state.get("connected", False)
+    cfg = st.session_state.get("conn_config", {})
+    h = host if host is not None else cfg.get("host", "localhost")
+    p = port if port is not None else cfg.get("port", 3306)
+    u = username if username is not None else cfg.get("username", "root")
+
+    ver = server_ver
+    if ver is None and st.session_state.get("engine"):
+        try:
+            v_info = st.session_state.engine.dialect.server_version_info
+            if v_info:
+                ver = f"MySQL {'.'.join(map(str, v_info[:2]))}"
+        except Exception:
+            ver = "MySQL 8.0"
+    if not ver:
+        ver = "MySQL 8.0"
+
+    conn_line_markup = ""
+    if is_conn:
+        conn_line_markup = f"""
+        <div class="sb-conn-compact-line" style="margin-top: 8px; margin-bottom: 4px; padding: 6px 10px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px;">
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #0F172A;">
+                <span style="width: 7.5px; height: 7.5px; border-radius: 50%; background: #10B981; display: inline-block; flex-shrink: 0; box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);"></span>
+                <span>{html.escape(str(h))}:{html.escape(str(p))}</span>
+            </div>
+            <div style="font-size: 11px; color: #64748B; margin-left: 13.5px; margin-top: 1px;">
+                {html.escape(str(u))}, {html.escape(str(ver))}
+            </div>
+        </div>
+        """
+
+    brand_html = f"""
     <div class="sb-brand-wrapper">
         <div class="sb-brand-row">
             <div class="sb-brand-left">
@@ -635,10 +900,10 @@ def render_sidebar_brand_redesign() -> None:
                 </div>
             </div>
             <button type="button" class="sb-collapse-btn" title="Collapse sidebar" onclick="
-                try {
+                try {{
                     var colBtn = window.parent.document.querySelector('[data-testid=\\'stSidebarCollapseButton\\'] button') || document.querySelector('[data-testid=\\'stSidebarCollapseButton\\'] button');
                     if (colBtn) colBtn.click();
-                } catch(e) {}
+                }} catch(e) {{}}
             ">
                 <svg width="14" height="14" viewBox="0 0 24 26" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="11 17 6 12 11 7"></polyline>
@@ -646,10 +911,11 @@ def render_sidebar_brand_redesign() -> None:
                 </svg>
             </button>
         </div>
+        {conn_line_markup}
         <div class="sb-header-teal-divider"></div>
     </div>
     """
-    st.markdown(html, unsafe_allow_html=True)
+    render_html(brand_html)
 
 
 def render_sidebar_promo_card() -> None:
@@ -716,7 +982,7 @@ def render_sidebar_promo_card() -> None:
         </div>
     </div>
     """
-    st.markdown(html, unsafe_allow_html=True)
+    render_html(html)
 
 
 def render_sidebar_section_heading() -> None:
@@ -737,7 +1003,7 @@ def render_sidebar_section_heading() -> None:
         <div class="sb-sec-line"></div>
     </div>
     """
-    st.markdown(html, unsafe_allow_html=True)
+    render_html(html)
 
 
 def render_sidebar_status_card_redesign(
@@ -790,7 +1056,7 @@ def render_sidebar_status_card_redesign(
             </div>
         </div>
         """
-    st.markdown(html, unsafe_allow_html=True)
+    render_html(html)
 
 
 def render_sidebar_bottom_waves() -> None:
@@ -805,4 +1071,4 @@ def render_sidebar_bottom_waves() -> None:
         </svg>
     </div>
     """
-    st.markdown(html, unsafe_allow_html=True)
+    render_html(html)

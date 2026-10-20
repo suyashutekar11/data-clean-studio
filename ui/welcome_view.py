@@ -17,6 +17,7 @@ import pathlib
 from typing import Optional, Union
 import streamlit as st
 import streamlit.components.v1 as components
+from ui.components import render_html
 
 # Locate the exact SVG file inside the SVG folder
 _SVG_ASSET_PATH = (
@@ -59,91 +60,149 @@ def render_app_header(
     port: Union[str, int] = "",
     version: str = "v1.2 Standard",
     theme: str = "light",
+    database: Optional[str] = None,
+    table: Optional[str] = None,
+    module: Optional[str] = None,
 ) -> None:
     """
-    Renders the dark rounded pill top banner with DataClean Studio branding,
-    Not Connected status pill, and version pill badge matching the reference design.
+    Renders the slim 64px navy top bar:
+    - Left: Breadcrumb (Database / Table / Module) in light text on navy
+    - Right: Connection chip (Connected localhost:3306 with green dot)
+    - Routed through render_html() to prevent raw HTML code blocks
     """
+    import html as html_lib
+
+    # Determine breadcrumb items
+    db_val = database or st.session_state.get("selected_db") or ""
+    if db_val == "-- Select Database --":
+        db_val = ""
+
+    tbl_val = table or st.session_state.get("selected_table") or ""
+    if tbl_val == "-- Select Table --":
+        tbl_val = ""
+
+    mod_val = module or ""
+    if not mod_val:
+        act_view = st.session_state.get("active_view", "")
+        ws_tbl = st.session_state.get("working_table_name")
+        if "Cleaning Workspace" in act_view and ws_tbl:
+            sub = st.session_state.get("workspace_sub_tab", "")
+            if sub:
+                # Strip leading emoji if present
+                parts = sub.split(" ", 1)
+                mod_val = parts[-1] if len(parts) > 1 and not parts[0].isalnum() else sub
+
+    # Build breadcrumb HTML
+    crumbs_html = []
+    if not db_val:
+        crumbs_html.append('<span class="landing-hdr-bc-last">DataClean Studio</span>')
+    elif db_val and not tbl_val:
+        crumbs_html.append(f'<span class="landing-hdr-bc-last">{html_lib.escape(str(db_val))}</span>')
+    elif db_val and tbl_val and not mod_val:
+        crumbs_html.append(f'<a href="?bc_nav=db" target="_self" class="landing-hdr-bc-muted">{html_lib.escape(str(db_val))}</a>')
+        crumbs_html.append('<span class="landing-hdr-bc-sep">/</span>')
+        crumbs_html.append(f'<span class="landing-hdr-bc-last">{html_lib.escape(str(tbl_val))}</span>')
+    else:
+        crumbs_html.append(f'<a href="?bc_nav=db" target="_self" class="landing-hdr-bc-muted">{html_lib.escape(str(db_val))}</a>')
+        crumbs_html.append('<span class="landing-hdr-bc-sep">/</span>')
+        crumbs_html.append(f'<a href="?bc_nav=table" target="_self" class="landing-hdr-bc-muted" title="{html_lib.escape(str(tbl_val))}">{html_lib.escape(str(tbl_val))}</a>')
+        crumbs_html.append('<span class="landing-hdr-bc-sep">/</span>')
+        crumbs_html.append(f'<span class="landing-hdr-bc-last">{html_lib.escape(str(mod_val))}</span>')
+
+    breadcrumb_markup = f"""
+    <div class="landing-hdr-breadcrumb">
+        {''.join(crumbs_html)}
+    </div>
+    """
+
+    # Build connection chip HTML
     if connected:
+        h_str = str(host or "localhost")
+        p_str = str(port or "3306")
         status_html = f"""
         <div class="landing-hdr-pill connected">
-            <span class="landing-hdr-dot dot-online"></span> Connected: {host}:{port}
+            <span class="landing-hdr-dot dot-online"></span>
+            <span>Connected &middot; {html_lib.escape(h_str)}:{html_lib.escape(p_str)}</span>
         </div>
         """
     else:
         status_html = """
         <div class="landing-hdr-pill disconnected">
-            <span class="landing-hdr-dot dot-offline"></span> Not Connected
+            <span class="landing-hdr-dot dot-offline"></span>
+            <span>Not Connected</span>
         </div>
         """
 
-    html = f"""
+    header_content = f"""
     <div class="landing-header-wrapper">
         <style>
         .landing-header-wrapper {{
             width: 100%;
-            max-width: 1140px;
-            margin: 0 auto 20px auto;
+            margin: 0 0 16px 0;
             box-sizing: border-box;
         }}
         .landing-hdr-bar {{
-            background: linear-gradient(90deg, #072635 0%, #0A374A 50%, #072635 100%) !important;
-            border-radius: 14px !important;
-            padding: 12px 24px !important;
+            background: #072635 !important;
+            border-radius: 12px !important;
+            height: 64px !important;
+            min-height: 64px !important;
+            max-height: 64px !important;
+            padding: 0 20px !important;
             display: flex !important;
             align-items: center !important;
             justify-content: space-between !important;
-            box-shadow: 0 4px 18px rgba(7, 38, 53, 0.25) !important;
+            box-shadow: 0 2px 8px rgba(7, 38, 53, 0.18) !important;
             box-sizing: border-box !important;
         }}
-        .landing-hdr-brand {{
-            display: flex;
-            align-items: center;
-            gap: 14px;
+        .landing-hdr-breadcrumb {{
+            display: flex !important;
+            align-items: center !important;
+            gap: 8px !important;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+            font-size: 13.5px !important;
+            line-height: 1 !important;
+            overflow: hidden !important;
+            white-space: nowrap !important;
+            text-overflow: ellipsis !important;
         }}
-        .landing-hdr-logo {{
-            width: 38px;
-            height: 38px;
-            border-radius: 10px;
-            background: #0E3A4C;
-            border: 1px solid rgba(56, 189, 248, 0.25);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
+        .landing-hdr-bc-muted {{
+            color: #94A3B8 !important;
+            text-decoration: none !important;
+            font-weight: 400 !important;
+            transition: color 150ms ease !important;
         }}
-        .landing-hdr-title {{
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            font-size: 16px;
-            font-weight: 700;
+        .landing-hdr-bc-muted:hover {{
+            color: #CBD5E1 !important;
+            text-decoration: underline !important;
+        }}
+        .landing-hdr-bc-sep {{
+            color: #64748B !important;
+            font-size: 13px !important;
+            user-select: none !important;
+        }}
+        .landing-hdr-bc-last {{
             color: #FFFFFF !important;
-            line-height: 1.2;
-            letter-spacing: -0.01em;
-        }}
-        .landing-hdr-sub {{
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            font-size: 11.5px;
-            font-weight: 400;
-            color: #8EB3C2 !important;
-            margin-top: 2px;
+            font-weight: 500 !important;
         }}
         .landing-hdr-meta {{
-            display: flex;
-            align-items: center;
-            gap: 10px;
+            display: flex !important;
+            align-items: center !important;
+            gap: 10px !important;
+            flex-shrink: 0 !important;
         }}
         .landing-hdr-pill {{
             background: #FFFFFF !important;
             border: 1px solid #E2E8F0 !important;
             border-radius: 9999px !important;
-            padding: 6px 16px !important;
+            padding: 6px 14px !important;
             font-family: 'Inter', sans-serif !important;
             font-size: 12px !important;
-            font-weight: 700 !important;
+            font-weight: 600 !important;
             display: inline-flex !important;
             align-items: center !important;
             gap: 8px !important;
-            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05) !important;
+            white-space: nowrap !important;
         }}
         .landing-hdr-pill.disconnected {{
             color: #E11D48 !important;
@@ -152,67 +211,40 @@ def render_app_header(
             color: #166534 !important;
         }}
         .landing-hdr-dot {{
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            display: inline-block;
+            width: 8px !important;
+            height: 8px !important;
+            border-radius: 50% !important;
+            display: inline-block !important;
+            flex-shrink: 0 !important;
         }}
         .landing-hdr-dot.dot-offline {{
-            background: #E11D48;
-            box-shadow: 0 0 0 2px rgba(225, 29, 72, 0.2);
+            background: #E11D48 !important;
+            box-shadow: 0 0 0 2px rgba(225, 29, 72, 0.2) !important;
         }}
         .landing-hdr-dot.dot-online {{
-            background: #10B981;
-            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
-        }}
-        .landing-hdr-version {{
-            background: #FFFFFF !important;
-            border: 1px solid #E2E8F0 !important;
-            border-radius: 9999px !important;
-            padding: 6px 16px !important;
-            font-family: 'Inter', sans-serif !important;
-            font-size: 12px !important;
-            font-weight: 700 !important;
-            color: #0F172A !important;
-            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
+            background: #10B981 !important;
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2) !important;
         }}
         @media (max-width: 640px) {{
             .landing-hdr-bar {{
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 12px;
-                padding: 14px 18px !important;
+                padding: 0 12px !important;
             }}
-            .landing-hdr-meta {{
-                width: 100%;
-                justify-content: flex-start;
-                flex-wrap: wrap;
+            .landing-hdr-breadcrumb {{
+                font-size: 12px !important;
+                gap: 6px !important;
             }}
         }}
         </style>
 
         <div class="landing-hdr-bar">
-            <div class="landing-hdr-brand">
-                <div class="landing-hdr-logo">
-                    <svg width="22" height="24" viewBox="0 0 24 26" fill="none">
-                        <path d="M12 1L2 5.5V12C2 18.5 6.3 24.3 12 25.8C17.7 24.3 22 18.5 22 12V5.5L12 1Z" fill="#0284C7" stroke="#38BDF8" stroke-width="1.3"/>
-                        <path d="M12 4.5L5 8V12C5 16.5 8 20.8 12 22C16 20.8 19 16.5 19 12V8L12 4.5Z" fill="#38BDF8" fill-opacity="0.35"/>
-                    </svg>
-                </div>
-                <div>
-                    <div class="landing-hdr-title">DataClean Studio</div>
-                    <div class="landing-hdr-sub">Enterprise MySQL Data Quality, Staging &amp; Cleaning Platform</div>
-                </div>
-            </div>
+            {breadcrumb_markup}
             <div class="landing-hdr-meta">
                 {status_html}
             </div>
         </div>
     </div>
     """
-    lines = [line.strip() for line in html.strip().splitlines() if line.strip()]
-    cleaned = chr(10).join(lines)
-    st.markdown(cleaned, unsafe_allow_html=True)
+    render_html(header_content)
 
 
 def get_animated_hero_graphic_html() -> str:

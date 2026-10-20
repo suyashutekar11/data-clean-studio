@@ -631,10 +631,26 @@ def attach_workspace(
 
         source_table_part = working_table_name.split(CLEANING_SUFFIX)[0]
 
+        source_row_count = 0
+        try:
+            quoted_source = _quote_table(database, source_table_part)
+            with engine.connect() as conn:
+                res = conn.execute(text(f"SELECT COUNT(*) FROM {quoted_source}"))
+                source_row_count = res.scalar() or 0
+        except Exception as count_err:
+            logger.warning(
+                "Could not query source row count for '%s.%s': %s",
+                database,
+                source_table_part,
+                count_err,
+            )
+            source_row_count = 0
+
         details = {
             "working_table_name": working_table_name,
             "source_db": database,
             "source_table": source_table_part,
+            "source_row_count": source_row_count,
             "working_row_count": info["row_count"],
             "status": "ready",
         }
@@ -1415,6 +1431,586 @@ def get_text_columns(
             str(e),
         )
         return []
+
+
+def get_text_columns_with_types(
+    engine,
+    database: str,
+    working_table_name: str,
+) -> List[Dict[str, str]]:
+    """
+    Retrieve all text/string column names and their data types for a table.
+    Discovers CHAR, VARCHAR, TINYTEXT, TEXT, MEDIUMTEXT, LONGTEXT, etc.
+    """
+    try:
+        column_query = text("""
+            SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = :database
+              AND TABLE_NAME = :table_name
+            ORDER BY ORDINAL_POSITION
+        """)
+        with engine.connect() as conn:
+            result = conn.execute(
+                column_query,
+                {"database": database, "table_name": working_table_name},
+            )
+            cols = []
+            for row in result:
+                mapping = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+                data_type = str(mapping.get("DATA_TYPE", "")).lower()
+                col_type = str(mapping.get("COLUMN_TYPE", "")).upper() or data_type.upper()
+                if _normalize_data_type(data_type) in TEXT_DATA_TYPES:
+                    cols.append({
+                        "name": mapping["COLUMN_NAME"],
+                        "data_type": data_type,
+                        "column_type": col_type,
+                    })
+            if cols:
+                return cols
+    except Exception as e:
+        logger.debug(
+            "INFORMATION_SCHEMA column discovery failed for '%s.%s', falling back to inspect: %s",
+            database,
+            working_table_name,
+            str(e),
+        )
+
+    # Fallback using SQLAlchemy inspect (e.g. for SQLite in tests)
+    try:
+        insp = inspect(engine)
+        cols = []
+        for c in insp.get_columns(working_table_name, schema=database if database else None):
+            col_type_str = str(c["type"]).lower()
+            norm = _normalize_data_type(col_type_str.split("(")[0].strip())
+            if norm in TEXT_DATA_TYPES:
+                cols.append({
+                    "name": c["name"],
+                    "data_type": norm,
+                    "column_type": str(c["type"]).upper(),
+                })
+        return cols
+    except Exception as e:
+        logger.error(
+            "Error retrieving text columns with types for '%s.%s': %s",
+            database,
+            working_table_name,
+            str(e),
+        )
+        return []
+
+
+# ============================================================
+# Special Character Cleaning
+# ============================================================
+
+# Common control characters that users might want to remove
+CONTROL_CHARS = {
+    "tab": {"char": "\t", "display": "\\t (Tab)", "regex": r"\t"},
+    "carriage_return": {"char": "\r", "display": "\\r (Carriage Return)", "regex": r"\r"},
+    "line_feed": {"char": "\n", "display": "\\n (Line Feed / Newline)", "regex": r"\n"},
+    "form_feed": {"char": "\f", "display": "\\f (Form Feed)", "regex": r"\f"},
+    "vertical_tab": {"char": "\v", "display": "\\v (Vertical Tab)", "regex": r"\v"},
+    "null_char": {"char": "\x00", "display": "\\x00 (Null Byte)", "regex": r"\x00"},
+}
+
+# Non-printable and invisible format characters
+NON_PRINTABLE_CHARS = {
+    "backspace": {"char": "\b", "display": "\\b (Backspace)", "regex": r"\x08"},
+    "escape": {"char": "\x1b", "display": "\\x1b (Escape)", "regex": r"\x1b"},
+    "delete": {"char": "\x7f", "display": "\\x7f (Delete / 0x7F)", "regex": r"\x7f"},
+    "zero_width_space": {"char": "\u200b", "display": "Zero-Width Space (U+200B)", "regex": r"\u200b"},
+    "zero_width_non_joiner": {"char": "\u200c", "display": "Zero-Width Non-Joiner (U+200C)", "regex": r"\u200c"},
+    "zero_width_joiner": {"char": "\u200d", "display": "Zero-Width Joiner (U+200D)", "regex": r"\u200d"},
+    "bom": {"char": "\ufeff", "display": "Byte Order Mark / BOM (U+FEFF)", "regex": r"\ufeff"},
+}
+
+# Common special characters users might want to remove/replace
+COMMON_SPECIAL_CHARS = [
+    ("@", "At sign (@)"),
+    ("#", "Hash (#)"),
+    ("$", "Dollar ($)"),
+    ("%", "Percent (%)"),
+    ("*", "Asterisk (*)"),
+    ("!", "Exclamation (!)"),
+    ("|", "Pipe (|)"),
+    ("_", "Underscore (_)"),
+    ("&", "Ampersand (&)"),
+    ("+", "Plus (+)"),
+    ("-", "Hyphen (-)"),
+    ("=", "Equals (=)"),
+    ("~", "Tilde (~)"),
+    ("^", "Caret (^)"),
+    ("`", "Backtick (` )"),
+    ("{", "Left brace ({)"),
+    ("}", "Right brace (})"),
+    ("[", "Left bracket ([)"),
+    ("]", "Right bracket (])"),
+    ("(", "Left paren (()"),
+    (")", "Right paren ())"),
+    ("<", "Less than (<)"),
+    (">", "Greater than (>)"),
+    (";", "Semicolon (;)"),
+    (":", "Colon (:)"),
+    ("'", "Single quote (')"),
+    ('"', 'Double quote (")'),
+    (",", "Comma (,)"),
+    (".", "Period (.)"),
+    ("?", "Question mark (?)"),
+    ("/", "Forward slash (/)"),
+    ("\\\\", "Backslash (\\\\)"),
+]
+
+# Regex metacharacters that need escaping inside character class [...]
+# Includes '-' so character ranges (e.g. a-z) are not accidentally created
+REGEX_METACHARS = set(r".^$*+?{}[]\|()-\/")
+
+
+def _escape_for_regex(char: str) -> str:
+    """Escape a single character for use in a regex character class."""
+    if char in REGEX_METACHARS:
+        return "\\" + char
+    return char
+
+
+def _build_char_class(chars: List[str]) -> str:
+    """Build a safe regex character class from a list of literal characters."""
+    escaped = [_escape_for_regex(c) for c in chars]
+    # Sort by length descending to handle multi-char sequences if any
+    escaped.sort(key=len, reverse=True)
+    return "[" + "".join(escaped) + "]"
+
+
+def scan_special_characters_workspace(
+    engine,
+    database: str,
+    working_table_name: str,
+    selected_columns: List[str],
+    control_chars_selected: List[str],
+    special_chars_selected: List[str],
+    custom_chars: str = "",
+    mode: str = "remove",
+    replacement: str = "",
+    non_printable_selected: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Scan text columns for special characters and return preview of affected values.
+    Does not modify database data.
+    
+    Args:
+        engine: SQLAlchemy Engine
+        database: Database name
+        working_table_name: Workspace table name
+        selected_columns: List of column names to scan
+        control_chars_selected: List of control character keys (e.g., ['tab', 'line_feed'])
+        special_chars_selected: List of special characters to check
+        custom_chars: Additional custom characters as a string
+        mode: 'remove' or 'replace'
+        replacement: String to replace matched characters with (when mode='replace')
+        non_printable_selected: Optional list of non-printable character keys
+    
+    Returns:
+        List of dicts with preview data per column
+    """
+    try:
+        # 1. Safety validation
+        if not working_table_name or working_table_name.count(CLEANING_SUFFIX) != 1:
+            return []
+
+        inspector = inspect(engine)
+        tables = inspector.get_table_names(schema=database if database else None)
+        if working_table_name not in tables:
+            return []
+
+        quoted_table = _quote_table(database, working_table_name)
+        
+        # Build the full list of characters to detect
+        all_chars_to_find = []
+        char_descriptions = {}
+        
+        # Add control characters
+        for key in control_chars_selected:
+            if key in CONTROL_CHARS and CONTROL_CHARS[key]["char"] not in all_chars_to_find:
+                char_info = CONTROL_CHARS[key]
+                all_chars_to_find.append(char_info["char"])
+                char_descriptions[char_info["char"]] = char_info["display"]
+            elif key in NON_PRINTABLE_CHARS and NON_PRINTABLE_CHARS[key]["char"] not in all_chars_to_find:
+                char_info = NON_PRINTABLE_CHARS[key]
+                all_chars_to_find.append(char_info["char"])
+                char_descriptions[char_info["char"]] = char_info["display"]
+
+        # Add non-printable characters
+        if non_printable_selected:
+            for key in non_printable_selected:
+                if key in NON_PRINTABLE_CHARS and NON_PRINTABLE_CHARS[key]["char"] not in all_chars_to_find:
+                    char_info = NON_PRINTABLE_CHARS[key]
+                    all_chars_to_find.append(char_info["char"])
+                    char_descriptions[char_info["char"]] = char_info["display"]
+                elif key in CONTROL_CHARS and CONTROL_CHARS[key]["char"] not in all_chars_to_find:
+                    char_info = CONTROL_CHARS[key]
+                    all_chars_to_find.append(char_info["char"])
+                    char_descriptions[char_info["char"]] = char_info["display"]
+        
+        # Add special characters
+        for ch in special_chars_selected:
+            if ch not in all_chars_to_find:
+                all_chars_to_find.append(ch)
+                char_descriptions[ch] = f"'{ch}'"
+        
+        # Add custom characters (each character individually)
+        for ch in custom_chars:
+            if ch not in all_chars_to_find:
+                all_chars_to_find.append(ch)
+                char_descriptions[ch] = f"'{ch}' (custom)"
+        
+        if not all_chars_to_find or not selected_columns:
+            return []
+        
+        # Build regex pattern for detection
+        char_class = _build_char_class(all_chars_to_find)
+        pattern = char_class
+        
+        # Discover column types for display
+        col_type_map = {}
+        for c in get_text_columns_with_types(engine, database, working_table_name):
+            col_type_map[c["name"]] = c.get("column_type") or c.get("data_type", "TEXT").upper()
+
+        results = []
+        
+        with engine.connect() as conn:
+            for column_name in selected_columns:
+                quoted_column = _quote_identifier(column_name)
+                col_data_type = col_type_map.get(column_name, "VARCHAR")
+                
+                # Query to find rows containing any of the target characters
+                query = text(f"""
+                    SELECT {quoted_column} AS original_value, COUNT(*) AS cnt
+                    FROM {quoted_table}
+                    WHERE {quoted_column} IS NOT NULL
+                      AND {quoted_column} REGEXP :pattern
+                    GROUP BY {quoted_column}
+                    ORDER BY cnt DESC
+                    LIMIT 50
+                """)
+                
+                try:
+                    result = conn.execute(query, {"pattern": pattern})
+                except Exception:
+                    # Fallback query without GROUP BY (e.g. SQLite or large TEXT sort limits)
+                    fallback_query = text(f"""
+                        SELECT {quoted_column} AS original_value, 1 AS cnt
+                        FROM {quoted_table}
+                        WHERE {quoted_column} IS NOT NULL
+                          AND {quoted_column} REGEXP :pattern
+                        LIMIT 50
+                    """)
+                    result = conn.execute(fallback_query, {"pattern": pattern})
+
+                rows = []
+                total_affected = 0
+                
+                for row in result:
+                    row_map = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+                    original = row_map.get("original_value", "")
+                    count = row_map.get("cnt", 1)
+                    total_affected += count
+                    
+                    # Show what the cleaned value would look like
+                    if mode == "remove":
+                        cleaned = "".join(c for c in original if c not in all_chars_to_find)
+                    else:
+                        cleaned = "".join(replacement if c in all_chars_to_find else c for c in original)
+                    
+                    rows.append({
+                        "original": original,
+                        "cleaned": cleaned,
+                        "count": count,
+                    })
+                
+                # Also get total count of affected rows
+                count_query = text(f"""
+                    SELECT COUNT(*) FROM {quoted_table}
+                    WHERE {quoted_column} IS NOT NULL
+                      AND {quoted_column} REGEXP :pattern
+                """)
+                total_rows = conn.execute(count_query, {"pattern": pattern}).scalar() or 0
+                
+                if total_rows > 0 or total_affected > 0:
+                    results.append({
+                        "column": column_name,
+                        "data_type": col_data_type,
+                        "total_affected_rows": total_rows,
+                        "total_affected_values": total_affected,
+                        "sample_rows": rows,
+                        "chars_targeted": [char_descriptions.get(c, f"'{c}'") for c in all_chars_to_find],
+                    })
+        
+        return results
+    
+    except Exception as e:
+        logger.error(
+            "Error scanning special characters in '%s.%s': %s",
+            database,
+            working_table_name,
+            str(e),
+        )
+        return []
+
+
+def clean_special_characters_workspace(
+    engine,
+    database: str,
+    working_table_name: str,
+    selected_columns: List[str],
+    control_chars_selected: List[str],
+    special_chars_selected: List[str],
+    custom_chars: str = "",
+    mode: str = "remove",
+    replacement: str = "",
+    non_printable_selected: Optional[List[str]] = None,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """
+    Clean special characters from text columns in the cleaning workspace.
+    Runs exclusively on isolated workspace tables. Production tables are strictly protected.
+    
+    Args:
+        engine: SQLAlchemy Engine
+        database: Database name
+        working_table_name: Workspace table name
+        selected_columns: List of column names to clean
+        control_chars_selected: List of control character keys
+        special_chars_selected: List of special characters
+        custom_chars: Additional custom characters string
+        mode: 'remove' or 'replace'
+        replacement: Replacement string (used when mode='replace')
+        non_printable_selected: Optional list of non-printable character keys
+    
+    Returns:
+        (success, message, report)
+    """
+    try:
+        # 1. Safety validation
+        if not working_table_name or working_table_name.count(CLEANING_SUFFIX) != 1:
+            return (
+                False,
+                "Refusing to clean a table that is not identified as a cleaning workspace.",
+                {},
+            )
+
+        safe_name = _make_safe_table_name(working_table_name)
+        if safe_name != working_table_name:
+            return (
+                False,
+                "Refusing to clean an invalid table identifier.",
+                {},
+            )
+
+        # 2. Validation: Input arguments
+        if not selected_columns:
+            return (
+                False,
+                "Please select at least one column to clean.",
+                {},
+            )
+
+        if mode not in ("remove", "replace"):
+            return (
+                False,
+                "Invalid mode. Must be 'remove' or 'replace'.",
+                {},
+            )
+
+        if mode == "replace" and replacement is None:
+            replacement = ""
+
+        # 3. Validation: Table existence
+        inspector = inspect(engine)
+        tables = inspector.get_table_names(schema=database if database else None)
+        if working_table_name not in tables:
+            return (
+                False,
+                f"Working table '{working_table_name}' not found in database '{database}'.",
+                {},
+            )
+
+        # 4. Validation: Column existence and text type
+        col_dict = {}
+        try:
+            column_query = text("""
+                SELECT COLUMN_NAME, DATA_TYPE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = :database
+                  AND TABLE_NAME = :table_name
+                ORDER BY ORDINAL_POSITION
+                """)
+            with engine.connect() as conn:
+                result = conn.execute(
+                    column_query,
+                    {"database": database, "table_name": working_table_name},
+                )
+                columns = [dict(row._mapping) for row in result]
+            col_dict = {
+                col["COLUMN_NAME"]: str(col["DATA_TYPE"]).lower() for col in columns
+            }
+        except Exception:
+            # Fallback for SQLite in tests
+            insp = inspect(engine)
+            for c in insp.get_columns(working_table_name, schema=database if database else None):
+                col_dict[c["name"]] = str(c["type"]).lower().split("(")[0].strip()
+
+        for col in selected_columns:
+            if col not in col_dict:
+                return (
+                    False,
+                    f"Column '{col}' not found in table '{working_table_name}'.",
+                    {},
+                )
+
+            col_type = _normalize_data_type(col_dict[col])
+            if col_type not in TEXT_DATA_TYPES:
+                return (
+                    False,
+                    f"Column '{col}' is of type '{col_type}', which is not a supported text/string column.",
+                    {},
+                )
+
+        # Build the full list of characters to clean
+        all_chars_to_clean = []
+        
+        for key in control_chars_selected:
+            if key in CONTROL_CHARS and CONTROL_CHARS[key]["char"] not in all_chars_to_clean:
+                all_chars_to_clean.append(CONTROL_CHARS[key]["char"])
+            elif key in NON_PRINTABLE_CHARS and NON_PRINTABLE_CHARS[key]["char"] not in all_chars_to_clean:
+                all_chars_to_clean.append(NON_PRINTABLE_CHARS[key]["char"])
+        
+        if non_printable_selected:
+            for key in non_printable_selected:
+                if key in NON_PRINTABLE_CHARS and NON_PRINTABLE_CHARS[key]["char"] not in all_chars_to_clean:
+                    all_chars_to_clean.append(NON_PRINTABLE_CHARS[key]["char"])
+                elif key in CONTROL_CHARS and CONTROL_CHARS[key]["char"] not in all_chars_to_clean:
+                    all_chars_to_clean.append(CONTROL_CHARS[key]["char"])
+
+        for ch in special_chars_selected:
+            if ch not in all_chars_to_clean:
+                all_chars_to_clean.append(ch)
+        
+        for ch in custom_chars:
+            if ch not in all_chars_to_clean:
+                all_chars_to_clean.append(ch)
+
+        if not all_chars_to_clean:
+            return (
+                False,
+                "No characters selected for cleaning. Please select at least one character type.",
+                {},
+            )
+
+        # Build regex pattern
+        char_class = _build_char_class(all_chars_to_clean)
+        pattern = char_class
+
+        quoted_table = _quote_table(database, working_table_name)
+
+        column_reports = []
+        total_values_changed = 0
+        total_rows_affected = 0
+
+        # Process each column inside an atomic transaction
+        with engine.begin() as conn:
+            for column_name in selected_columns:
+                quoted_column = _quote_identifier(column_name)
+
+                # Count affected rows before update
+                count_query = text(f"""
+                    SELECT COUNT(*) FROM {quoted_table}
+                    WHERE {quoted_column} IS NOT NULL
+                      AND {quoted_column} REGEXP :pattern
+                """)
+                affected_count = conn.execute(count_query, {"pattern": pattern}).scalar() or 0
+
+                if affected_count == 0:
+                    column_reports.append({
+                        "column": column_name,
+                        "values_changed": 0,
+                        "rows_affected": 0,
+                    })
+                    continue
+
+                if mode == "remove":
+                    # Use REGEXP_REPLACE to remove all target characters
+                    update_query = text(f"""
+                        UPDATE {quoted_table}
+                        SET {quoted_column} = REGEXP_REPLACE({quoted_column}, :pattern, '')
+                        WHERE {quoted_column} IS NOT NULL
+                          AND {quoted_column} REGEXP :pattern
+                    """)
+                    conn.execute(update_query, {"pattern": pattern})
+                else:
+                    # Replace mode - escape backslashes and dollar signs for regex replacement
+                    escaped_replacement = replacement.replace("\\", "\\\\").replace("$", "\\$")
+                    update_query = text(f"""
+                        UPDATE {quoted_table}
+                        SET {quoted_column} = REGEXP_REPLACE({quoted_column}, :pattern, :replacement)
+                        WHERE {quoted_column} IS NOT NULL
+                          AND {quoted_column} REGEXP :pattern
+                    """)
+                    conn.execute(update_query, {"pattern": pattern, "replacement": escaped_replacement})
+
+                total_values_changed += affected_count
+                total_rows_affected += affected_count
+
+                column_reports.append({
+                    "column": column_name,
+                    "values_changed": affected_count,
+                    "rows_affected": affected_count,
+                })
+
+        # Build report
+        op_name = "Special Character Removal" if mode == "remove" else "Special Character Replacement"
+        
+        report = {
+            "operation": op_name,
+            "mode": mode,
+            "replacement": replacement if mode == "replace" else "",
+            "columns_affected": column_reports,
+            "total_values_changed": total_values_changed,
+            "rows_affected": total_rows_affected,
+            "chars_cleaned": [c for c in all_chars_to_clean],
+            "control_chars": control_chars_selected,
+            "non_printable_chars": non_printable_selected or [],
+            "special_chars": special_chars_selected,
+            "custom_chars": custom_chars,
+        }
+
+        if total_values_changed == 0:
+            message = (
+                f"Special character cleaning completed. No matching characters found in "
+                f"the selected column(s)."
+            )
+        else:
+            char_desc = ", ".join([f"'{c}'" for c in all_chars_to_clean[:10]])
+            if len(all_chars_to_clean) > 10:
+                char_desc += f" and {len(all_chars_to_clean) - 10} more"
+            
+            action = "removed" if mode == "remove" else f"replaced with '{replacement}'"
+            message = (
+                f"Successfully {action} special characters ({char_desc}) in "
+                f"{total_values_changed} value(s) across {len(column_reports)} column(s)."
+            )
+
+        return (True, message, report)
+
+    except Exception as e:
+        logger.error(
+            "Error performing special character cleaning on '%s': %s",
+            working_table_name,
+            str(e),
+        )
+        return (
+            False,
+            f"Error during special character cleaning: {str(e)}",
+            {},
+        )
 
 
 def format_dates_workspace(
@@ -5362,3 +5958,25 @@ from src.advanced_date_standardization import (
     preview_column_standardization,
     standardize_column,
 )
+
+# ============================================================
+# INTELLIGENT NUMERIC DETECTION & CONVERSION
+# ============================================================
+try:
+    import src.numeric_cleaning as _nc
+    SUPPORTED_NUMERIC_TYPES = getattr(_nc, "SUPPORTED_NUMERIC_TYPES", [])
+    NUMBER_FORMATS = getattr(_nc, "NUMBER_FORMATS", {})
+    IDENTIFIER_KEYWORDS = getattr(_nc, "IDENTIFIER_KEYWORDS", set())
+    CURRENCY_SYMBOLS = getattr(_nc, "CURRENCY_SYMBOLS", set())
+    NumericNormalizationConfig = getattr(_nc, "NumericNormalizationConfig", None)
+    ValueValidationResult = getattr(_nc, "ValueValidationResult", None)
+    NumericColumnAnalysis = getattr(_nc, "NumericColumnAnalysis", None)
+    NumericDetectionClassification = getattr(_nc, "NumericDetectionClassification", None)
+    normalize_and_validate_value = getattr(_nc, "normalize_and_validate_value", None)
+    get_eligible_text_columns = getattr(_nc, "get_eligible_text_columns", None)
+    analyze_numeric_column = getattr(_nc, "analyze_numeric_column", None)
+    scan_table_numeric_candidates = getattr(_nc, "scan_table_numeric_candidates", None)
+    convert_column_to_numeric_workspace = getattr(_nc, "convert_column_to_numeric_workspace", None)
+    check_numeric_candidate_pattern = getattr(_nc, "check_numeric_candidate_pattern", None)
+except Exception:
+    pass

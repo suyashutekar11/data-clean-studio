@@ -4,7 +4,7 @@ __pycache__/
 *.pyd
 .pytest_cache/
 .env
-*.log
+.env.example
 
 .planning/
 
@@ -13,3 +13,9 @@ AGENTS.md
 DataClean_Studio_Project_Documentation.docx
 create_presentation_doc.py
 SVG/
+.vscode/
+
+# Exclude MD reports and presentation files (not part of core code)
+*.md
+*.docx
+*.txt
